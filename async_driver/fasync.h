@@ -1,5 +1,5 @@
-#ifndef __PICA8_ASYNC_NOTIH__
-#define __PICA8_ASYNC_NOTI_H__
+#ifndef __PICA8_FASYNC_H__
+#define __PICA8_FASYNC_H__
 
 /* device node name   /dev/swctrl */
 #define DEVICE_NAME   "swctrl"
@@ -22,10 +22,9 @@
 #define PICA8_FAN_SIG		SIGUSR1
 #define PICA8_PORT_SIG		SIGUSR2
 
-
 #pragma pack(1)
 typedef union {
-	uint32_t data;
+	unsigned int data;
 	struct {
 		unsigned char id;
 		unsigned short num;
@@ -39,4 +38,4 @@ static status_info info;
 #define data_no info.byte.num
 #pragma pack()
 
-#endif /* __PICA8_ASYNC_NOTI_H__ */
+#endif /* __PICA8_FASYNC_H__ */

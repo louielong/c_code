@@ -6,21 +6,59 @@
 #include <poll.h>
 #include <signal.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <sys/time.h>
 #include <time.h>
+#include "fasync.h"
 
 int fd;
 
-#define DEVICE_NAME   "buttons_fasync"  //设备名/dev/buttons_fasync
-
-void my_signal_fun(int signum)
+void psu_signal_fun(int signum)
 {
-	unsigned char key_val;
-	int a = 100;
-	int b = 100;
-	read(fd, &key_val, 1);
-	printf("key_val: 0x%x\n", key_val);
-	sleep(5);
+	unsigned int  *info_arr;
+	int i, ret;
+	ret = ioctl(fd, READ_PSU_INFO);
+	if (ret = 255)
+		return ;
+	else if (ret > 0) {
+		info_arr = malloc(ret * sizeof(unsigned int));
+		read(fd, info_arr, ret);
+		for (i = 0; i < ret; ++i) {
+			printf("key_val: 0x%x\n", info_arr[i]);
+		}
+	}
+}
+
+void fan_signal_fun(int signum)
+{
+	unsigned int  *info_arr;
+	int i, ret;
+	ret = ioctl(fd, READ_FAN_INFO);
+	if (ret = 255)
+		return ;
+	else if (ret > 0) {
+		info_arr = malloc(ret * sizeof(unsigned int));
+		read(fd, info_arr, ret);
+		for (i = 0; i < ret; ++i) {
+			printf("key_val: 0x%x\n", info_arr[i]);
+		}
+	}
+}
+
+void port_signal_fun(int signum)
+{
+	unsigned int  *info_arr;
+	int i, ret;
+	ret = ioctl(fd, READ_PORT_INFO);
+	if (ret = 255)
+		return ;
+	else if (ret > 0) {
+		info_arr = malloc(ret * sizeof(unsigned int));
+		read(fd, info_arr, ret);
+		for (i = 0; i < ret; ++i) {
+			printf("key_val: 0x%x\n", info_arr[i]);
+		}
+	}
 }
 
 int main(int argc, char **argv)
@@ -29,36 +67,31 @@ int main(int argc, char **argv)
 	int ret;
 	int Oflags;
 	time_t timep;
-	
-	/*打开设备*/
-	fd = open("/dev/buttons_fasync", O_RDWR);
-	if (fd < 0)
-	{
-		printf("can't open!\n");
-		return 0;
-	}
-	else
-		printf("%s open ok!\n",DEVICE_NAME);
 
-	/*应用程序捕捉SIGIO信号
-	*设置进程接收到该信号的处理函数
-	*/
-	signal(SIGIO, my_signal_fun);
+	/* open device */
+	fd = open("/dev/swctrl", O_RDWR);
+	if (fd < 0) {
+		printf("can't open %s\n", DEVICE_NAME);
+		return -1;
+	} else
+		printf("%s open success\n", DEVICE_NAME);
+
+	/* set signal handle function */
+	signal(PICA8_PSU_SIG, psu_signal_fun);
+	//signal(PICA8_FAN_SIG, fan_signal_fun);
+	//signal(PICA8_PORT_SIG, port_signal_fun);
 
 	/*将filp->owner设置为当前的进程
 	*filp所指向的文件可读或者可写就会给filp->owner发消息
 	*/
 	fcntl(fd, F_SETOWN, getpid());
-	
-	/*获得该设备的打开方式*/
-	Oflags = fcntl(fd, F_GETFL); 
-	
-	/*设置该文件的标志为FASYNC
-	*设置文件的标志为FASYNC将导致驱动程序的fasync被调用
-	*这样文件就开始处于异步通知状态了
-	*/
+
+	/* get the device open method */
+	Oflags = fcntl(fd, F_GETFL);
+
+	/* set fasync */
 	fcntl(fd, F_SETFL, Oflags | FASYNC);
-	
+
 	while (1)
 	{
 		sleep(10);
@@ -66,7 +99,7 @@ int main(int argc, char **argv)
 		//printf("%s",ctime(&timep));
 		printf("wake up!\n");
 	}
-	
+
 	return 0;
 }
 

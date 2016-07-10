@@ -12,12 +12,12 @@
 #include <linux/ioctl.h>
 #include <linux/err.h>
 #include <linux/workqueue.h>
-#include "../cpld/cpld.h"
+//#include "../cpld/cpld.h"
 #include "async_noti.h"
 
-#define FAN_NUM         4   	//BOX hardware FAN number
-#define SFP_NUM         0   	//BOX hardware sfp port number
-#define QSFP_NUM        32   	//BOX hardware qsfp port number
+#define FAN_NUM         4	//BOX hardware FAN number
+#define SFP_NUM         0	//BOX hardware sfp port number
+#define QSFP_NUM        32	//BOX hardware qsfp port number
 #define PSU_NUM         2       //BOX hardware psu num
 
 #define PORT_SFP_DEV_START  (1)
@@ -36,8 +36,14 @@ struct semaphore event_sem;
 struct workqueue_struct *check_wq;	/* work queue struct */
 struct delayed_work check_dwq;
 
-static int mode = 0;
-static char first_read = 0;
+typedef struct {
+	int mode;
+	char psu_first_read;
+	char fan_first_read;
+	char port_first_read;
+	char who_read;
+}read_flag;
+read_flag *swctrl_flag;
 
 /* msg record struct */
 typedef struct {
@@ -48,8 +54,8 @@ typedef struct {
 
 status_record *psu_record;
 status_record *fan_record;
-status_record *ports_record;
-
+status_record *port_record;
+#if 0
 /* msg record array */
 static void add_hardware_info(status_info hw_info, status_record *record)
 {
@@ -541,15 +547,15 @@ static void get_port_info(unsigned char port_status,
 		ports_record->status_record[status_rec_offest] = port_status;
 	}
 }
-
+#endif
 /* hardware check workqueue function */
 static void check_info(struct work_struct *work)
 {
-	int i, num, rec_num, port_start;
-	unsigned char status;
+	//int i, num, rec_num, port_start;
+	//unsigned char status;
 
-	if (mode != 0)
-		mode = 1;
+	if (swctrl_flag->mode != 0)
+		swctrl_flag->mode = 1;
 #if 0
 	status_arr = kmalloc(sizeof(unsigned int) * 64, GFP_KERNEL);
 	if (!status_arr) {
@@ -557,6 +563,7 @@ static void check_info(struct work_struct *work)
 		return;
 	}
 #endif
+#if 0
 	/* PSU */
 	rec_num = 0;
 	status = pack_psu_status(PSU_NUM);
@@ -592,13 +599,18 @@ static void check_info(struct work_struct *work)
 		port_start += num;
 		++rec_num; /* the count of port in record array */
 	}
-
+#endif
 	/* if have status change or first check, release signal */
-	if (status_change > 0 || mode == 0)
-		kill_fasync(&(async_noti), SIGIO, POLL_IN);
+	if (psu_record->status_change > 0 || swctrl_flag->mode == 0)
+		kill_fasync(&(async_noti), PICA8_PSU_SIG, POLL_IN);
+	if (fan_record->status_change > 0 || swctrl_flag->mode == 0)
+		kill_fasync(&(async_noti), PICA8_FAN_SIG, POLL_IN);
+
+	if (port_record->status_change > 0 || swctrl_flag->mode == 0)
+		kill_fasync(&(async_noti), PICA8_PORT_SIG, POLL_IN);
 
 	queue_delayed_work(check_wq, &check_dwq, 3 * HZ);
-	++mode;
+	++swctrl_flag->mode;
 }
 
 /* device driver open function */
@@ -612,7 +624,7 @@ int async_open(struct inode *inode, struct file *file)
 ssize_t async_read(struct file * file, char __user * buf, size_t size,
 		   loff_t * ppos)
 {
-	int tmp = status_change;
+	int tmp = 0;
 
 	printk(KERN_ALERT "async read\n");
 
@@ -620,24 +632,54 @@ ssize_t async_read(struct file * file, char __user * buf, size_t size,
 	    return -ERESTARTSYS;
 	}
 
-	if (first_read == 0) {
-	    first_read = 1;
+	if (swctrl_flag->psu_first_read == 0) {
+	    swctrl_flag->psu_first_read = 1;
 	    up(&event_sem);
 	    return 255;
 	}
-	    
-	if (status_change > 0) {
-	    if (copy_to_user
-		(buf, status_arr, sizeof(unsigned int) * status_change)) {
+	if (swctrl_flag->fan_first_read == 0) {
+	    swctrl_flag->fan_first_read = 1;
+	    up(&event_sem);
+	    return 255;
+	}
+	if (swctrl_flag->port_first_read == 0) {
+	    swctrl_flag->port_first_read = 1;
+	    up(&event_sem);
+	    return 255;
+	}
+
+	if (swctrl_flag->who_read == PSU && psu_record->status_change > 0) {
+	    if (copy_to_user(buf, psu_record->status_change_arr,\
+			sizeof(unsigned int) * psu_record->status_change)) {
 		    up(&(event_sem));
 		    return -EFAULT;
 	    }
+	    tmp = psu_record->status_change;
+	    psu_record->status_change = 0;
 	}
 
-	status_change = 0;
-	//kfree(status_arr);
+	if (swctrl_flag->who_read == FAN && fan_record->status_change > 0) {
+	    if (copy_to_user(buf, fan_record->status_change_arr,\
+			sizeof(unsigned int) * fan_record->status_change)) {
+		    up(&(event_sem));
+		    return -EFAULT;
+	    }
+	    tmp = psu_record->status_change;
+	    fan_record->status_change = 0;
+	}
+
+	if (swctrl_flag->who_read == PORT && port_record->status_change > 0) {
+	    if (copy_to_user(buf, port_record->status_change_arr,\
+			sizeof(unsigned int) * port_record->status_change)) {
+		    up(&(event_sem));
+		    return -EFAULT;
+	    }
+	    tmp = psu_record->status_change;
+	    port_record->status_change = 0;
+	}
+
 	up(&event_sem);
-	
+
 	return tmp;
 }
 
@@ -650,10 +692,21 @@ long async_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 
-	case INFO_NUM_CMD:	/* get info total number */
-		ret = put_user(status_change, (unsigned long __user *)arg);
+	case READ_PSU_INFO:	/* get psu info number */
+		ret = put_user(psu_record->status_change, \
+			       (unsigned long __user *)arg);
+		swctrl_flag->who_read = PSU;
 		break;
-
+	case READ_FAN_INFO:	/* get fan info number */
+		ret = put_user(fan_record->status_change, \
+			       (unsigned long __user *)arg);
+		swctrl_flag->who_read = FAN;
+		break;
+	case READ_PORT_INFO:	/* get port info number */
+		ret = put_user(port_record->status_change, \
+			       (unsigned long __user *)arg);
+		swctrl_flag->who_read = PORT;
+		break;
 	default:
 		return -EINVAL;
 	}
