@@ -22,11 +22,11 @@ async:
 
 fasync:
 	#(cd $(KERNDIR) && $(CC) $(INC) -o $(PWD)/fasync -c $(PWD)/fasync.c)
-	$(CC) $(INC) -o fasync -c fasync.c
+	$(CC) $(INC) -o fasync  fasync.c
 
 all_clean: clean
 	rm -fr  *.symvers  *.ko *.order
 clean:
 	rm -fr *.o *~.core .*.cmd *.mod.c ./tmp_version \
-			*.ko *.order  *.symvers
+			*.ko *.order  *.symvers fasync
 

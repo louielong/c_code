@@ -485,6 +485,7 @@ static unsigned char pack_qsfp_status(int offest, int num)
 
     return status;
 }
+
 /* read port infomation
  * mode=0 init port info read
  * mode=1 status change check mode
@@ -601,14 +602,15 @@ static void check_info(struct work_struct *work)
 	}
 #endif
 	/* if have status change or first check, release signal */
+#if 0
 	if (psu_record->status_change > 0 || swctrl_flag->mode == 0)
 		kill_fasync(&(async_noti), PICA8_PSU_SIG, POLL_IN);
 	if (fan_record->status_change > 0 || swctrl_flag->mode == 0)
 		kill_fasync(&(async_noti), PICA8_FAN_SIG, POLL_IN);
-
 	if (port_record->status_change > 0 || swctrl_flag->mode == 0)
 		kill_fasync(&(async_noti), PICA8_PORT_SIG, POLL_IN);
-
+#endif
+	printk(KERN_ALERT "driver alive\n");
 	queue_delayed_work(check_wq, &check_dwq, 3 * HZ);
 	++swctrl_flag->mode;
 }
@@ -743,6 +745,12 @@ static int __init dev_init(void)
 {
 	int ret;
 
+	swctrl_flag = kzalloc(sizeof(read_flag), GFP_KERNEL);
+	if (!swctrl_flag) {
+		printk(KERN_ALERT "not have enough memory\n");
+		return -1;
+	}
+
 	ret = alloc_chrdev_region(&dev_id, 0, 1, DEVICE_NAME);
 	if (ret) {
 		printk(KERN_ALERT "can't get major number\n");
@@ -793,9 +801,13 @@ static void __exit dev_exit(void)
 	unregister_chrdev_region(dev_id, 1);
 	cdev_del(&async_cdev);
 
-	cancel_delayed_work(&check_dwq);
-	flush_workqueue(check_wq);
-	destroy_workqueue(check_wq);
+	if (check_wq) {
+		cancel_delayed_work(&check_dwq);
+		flush_workqueue(check_wq);
+		destroy_workqueue(check_wq);
+	}
+	if (swctrl_flag)
+		kfree(swctrl_flag);
 
 	printk(DEVICE_NAME
 	       " Async Notification char driver clean up\n");
