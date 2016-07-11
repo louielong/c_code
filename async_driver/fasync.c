@@ -10,63 +10,62 @@
 #include <sys/time.h>
 #include <time.h>
 #include "fasync.h"
+#include <pthread.h>
 
-int fd;
+int fd, first_read = 0;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void psu_signal_fun(int signum)
 {
 	unsigned int  *info_arr;
 	int i, ret;
-	ret = ioctl(fd, READ_PSU_INFO);
-	if (ret = 255)
+    unsigned long msg_num;
+#if 0
+    if (first_read == 0) {
+	    ret = ioctl(fd, READ_ACK, &msg_num);
+        first_read = 1;
+        printf("ret = %d, msg_num = %d\nfirst read, do some init\n", ret, msg_num);
 		return ;
-	else if (ret > 0) {
-		info_arr = malloc(ret * sizeof(unsigned int));
-		read(fd, info_arr, ret);
-		for (i = 0; i < ret; ++i) {
-			printf("key_val: 0x%x\n", info_arr[i]);
-		}
-	}
-}
+    }
 
-void fan_signal_fun(int signum)
-{
-	unsigned int  *info_arr;
-	int i, ret;
-	ret = ioctl(fd, READ_FAN_INFO);
-	if (ret = 255)
-		return ;
-	else if (ret > 0) {
-		info_arr = malloc(ret * sizeof(unsigned int));
-		read(fd, info_arr, ret);
-		for (i = 0; i < ret; ++i) {
-			printf("key_val: 0x%x\n", info_arr[i]);
-		}
-	}
-}
+	ret = ioctl(fd, READ_PSU_INFO, &msg_num);
+    if (ret < 0){
+        printf("ioctrl failed\n");
+    }
 
-void port_signal_fun(int signum)
-{
-	unsigned int  *info_arr;
-	int i, ret;
-	ret = ioctl(fd, READ_PORT_INFO);
-	if (ret = 255)
-		return ;
-	else if (ret > 0) {
+	if (ret == 0 && msg_num > 0) {
 		info_arr = malloc(ret * sizeof(unsigned int));
-		read(fd, info_arr, ret);
-		for (i = 0; i < ret; ++i) {
+		read(fd, info_arr, msg_num);
+		printf("info msg num: %d\n", msg_num);
+		for (i = 0; i < msg_num; ++i) {
 			printf("key_val: 0x%x\n", info_arr[i]);
 		}
-	}
+	} else if (msg_num == 0) {
+        printf("get signal, do something\n");
+    }
+
+    if (info_arr)
+        free(info_arr);
+#endif
+    pthread_mutex_lock(&mutex);
+    sleep(10);
+	ret = read(fd, &i, sizeof(int));
+	printf("ret = %d\n", ret);
+	if (ret) {
+        printf("read failed\n");
+        return ;
+    }
+    printf("key_val: %d\n", i);
+    pthread_mutex_unlock(&mutex);
 }
 
 int main(int argc, char **argv)
 {
 	unsigned char key_val;
-	int ret;
-	int Oflags;
+	int ret, Oflags;
 	time_t timep;
+    struct sigaction act;
+    sigset_t mask;
 
 	/* open device */
 	fd = open("/dev/swctrl", O_RDWR);
@@ -81,6 +80,17 @@ int main(int argc, char **argv)
 	//signal(PICA8_FAN_SIG, fan_signal_fun);
 	//signal(PICA8_PORT_SIG, port_signal_fun);
 
+#if 0
+    /* real time signal  */
+    sigemptyset(&mask);
+    sigaddset(&mask, PICA8_PSU_SIG);
+    act.sa_sigaction = psu_signal_fun;
+    act.sa_flags = SA_SIGINFO;
+    if (sigaction(PICA8_PSU_SIG, &act, NULL) < 0) {
+            printf("install RTsigal error\n");
+    }
+#endif
+
 	/*将filp->owner设置为当前的进程
 	*filp所指向的文件可读或者可写就会给filp->owner发消息
 	*/
@@ -91,10 +101,13 @@ int main(int argc, char **argv)
 
 	/* set fasync */
 	fcntl(fd, F_SETFL, Oflags | FASYNC);
+    fcntl(fd, 10, PICA8_PSU_SIG);
 
-	while (1)
+    pthread_mutex_init(&mutex,NULL);
+
+    while (1)
 	{
-		sleep(10);
+		sleep(100);
 		//time(&timep);
 		//printf("%s",ctime(&timep));
 		printf("wake up!\n");

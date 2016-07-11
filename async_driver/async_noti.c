@@ -8,7 +8,6 @@
 #include <linux/device.h>
 #include <linux/fcntl.h>
 #include <linux/sched.h>
-#include <linux/semaphore.h>
 #include <linux/ioctl.h>
 #include <linux/err.h>
 #include <linux/workqueue.h>
@@ -31,24 +30,20 @@ struct cdev async_cdev;		/* char device */
 struct class *async_class;
 struct fasync_struct *async_noti;
 
-struct semaphore event_sem;
-
 struct workqueue_struct *check_wq;	/* work queue struct */
 struct delayed_work check_dwq;
 
 typedef struct {
-	int mode;
-	char psu_first_read;
-	char fan_first_read;
-	char port_first_read;
-	char who_read;
+    int mode;
+    char read;
 }read_flag;
 read_flag *swctrl_flag;
 
 /* msg record struct */
 typedef struct {
-    unsigned int status_change;       /* status change count number */
+    int mode;
     unsigned char status_record[16];      /* record device status */
+    unsigned int status_change;       /* status change count number */
     unsigned int status_change_arr[64];  /* record device status change arr */
 }status_record;
 
@@ -59,13 +54,8 @@ status_record *port_record;
 /* msg record array */
 static void add_hardware_info(status_info hw_info, status_record *record)
 {
-	if (down_interruptible(&event_sem) < 0)
-		return;
-
 	record->status_change_arr[record->status_change] = hw_info.data;
 	++record->status_change;
-
-	up(&event_sem);
 
 	return;
 }
@@ -555,15 +545,9 @@ static void check_info(struct work_struct *work)
 	//int i, num, rec_num, port_start;
 	//unsigned char status;
 
-	if (swctrl_flag->mode != 0)
-		swctrl_flag->mode = 1;
-#if 0
-	status_arr = kmalloc(sizeof(unsigned int) * 64, GFP_KERNEL);
-	if (!status_arr) {
-		printk(KERN_ALERT "no memory for status_arr\n");
-		return;
-	}
-#endif
+	//if (swctrl_flag->mode != 0)
+	//	swctrl_flag->mode = 1;
+
 #if 0
 	/* PSU */
 	rec_num = 0;
@@ -602,17 +586,20 @@ static void check_info(struct work_struct *work)
 	}
 #endif
 	/* if have status change or first check, release signal */
+	if (swctrl_flag->mode <= 5)
+        kill_fasync(&(async_noti), PICA8_PSU_SIG, POLL_IN);
 #if 0
-	if (psu_record->status_change > 0 || swctrl_flag->mode == 0)
+	if (swctrl_flag->mode == 0 || (swctrl_flag->read == 1 && psu_record->status_change > 0))
 		kill_fasync(&(async_noti), PICA8_PSU_SIG, POLL_IN);
 	if (fan_record->status_change > 0 || swctrl_flag->mode == 0)
 		kill_fasync(&(async_noti), PICA8_FAN_SIG, POLL_IN);
 	if (port_record->status_change > 0 || swctrl_flag->mode == 0)
 		kill_fasync(&(async_noti), PICA8_PORT_SIG, POLL_IN);
 #endif
-	printk(KERN_ALERT "driver alive\n");
-	queue_delayed_work(check_wq, &check_dwq, 3 * HZ);
+	printk(KERN_ALERT "swctrl_flag->mode = %d\n", swctrl_flag->mode);
 	++swctrl_flag->mode;
+   // psu_record->status_change = 1;
+	queue_delayed_work(check_wq, &check_dwq, 3 * HZ);
 }
 
 /* device driver open function */
@@ -629,41 +616,25 @@ ssize_t async_read(struct file * file, char __user * buf, size_t size,
 	int tmp = 0;
 
 	printk(KERN_ALERT "async read\n");
-
-	if (down_interruptible(&event_sem) < 0) {
-	    return -ERESTARTSYS;
+	if (swctrl_flag->mode > 0) {
+        tmp = copy_to_user(buf, &(swctrl_flag->mode), sizeof(int));
+	    if (tmp) {
+		    return -EFAULT;
+	    }
 	}
 
-	if (swctrl_flag->psu_first_read == 0) {
-	    swctrl_flag->psu_first_read = 1;
-	    up(&event_sem);
-	    return 255;
-	}
-	if (swctrl_flag->fan_first_read == 0) {
-	    swctrl_flag->fan_first_read = 1;
-	    up(&event_sem);
-	    return 255;
-	}
-	if (swctrl_flag->port_first_read == 0) {
-	    swctrl_flag->port_first_read = 1;
-	    up(&event_sem);
-	    return 255;
-	}
-
-	if (swctrl_flag->who_read == PSU && psu_record->status_change > 0) {
+#if 0
+	if (swctrl_flag->read == 1 && psu_record->status_change > 0) {
 	    if (copy_to_user(buf, psu_record->status_change_arr,\
 			sizeof(unsigned int) * psu_record->status_change)) {
-		    up(&(event_sem));
 		    return -EFAULT;
 	    }
 	    tmp = psu_record->status_change;
 	    psu_record->status_change = 0;
 	}
-
 	if (swctrl_flag->who_read == FAN && fan_record->status_change > 0) {
 	    if (copy_to_user(buf, fan_record->status_change_arr,\
 			sizeof(unsigned int) * fan_record->status_change)) {
-		    up(&(event_sem));
 		    return -EFAULT;
 	    }
 	    tmp = psu_record->status_change;
@@ -673,14 +644,12 @@ ssize_t async_read(struct file * file, char __user * buf, size_t size,
 	if (swctrl_flag->who_read == PORT && port_record->status_change > 0) {
 	    if (copy_to_user(buf, port_record->status_change_arr,\
 			sizeof(unsigned int) * port_record->status_change)) {
-		    up(&(event_sem));
 		    return -EFAULT;
 	    }
 	    tmp = psu_record->status_change;
 	    port_record->status_change = 0;
 	}
-
-	up(&event_sem);
+#endif
 
 	return tmp;
 }
@@ -689,16 +658,20 @@ ssize_t async_read(struct file * file, char __user * buf, size_t size,
 long async_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	long ret = 0;
+    int a = 255;
 
 	printk(KERN_ALERT "async ioctl\n");
 
 	switch (cmd) {
-
+	case READ_ACK:	/* get signal acknowledgement */
+		swctrl_flag->read = 1;
+		ret = put_user(a, (unsigned long __user *)arg);
+		break;
 	case READ_PSU_INFO:	/* get psu info number */
 		ret = put_user(psu_record->status_change, \
 			       (unsigned long __user *)arg);
-		swctrl_flag->who_read = PSU;
 		break;
+#if 0
 	case READ_FAN_INFO:	/* get fan info number */
 		ret = put_user(fan_record->status_change, \
 			       (unsigned long __user *)arg);
@@ -709,6 +682,7 @@ long async_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			       (unsigned long __user *)arg);
 		swctrl_flag->who_read = PORT;
 		break;
+#endif
 	default:
 		return -EINVAL;
 	}
@@ -746,10 +720,12 @@ static int __init dev_init(void)
 	int ret;
 
 	swctrl_flag = kzalloc(sizeof(read_flag), GFP_KERNEL);
-	if (!swctrl_flag) {
-		printk(KERN_ALERT "not have enough memory\n");
-		return -1;
-	}
+	if (!swctrl_flag)
+		return -ENOMEM;
+
+	psu_record = kzalloc(sizeof(status_record), GFP_KERNEL);
+	if (!psu_record)
+		return -ENOMEM;
 
 	ret = alloc_chrdev_region(&dev_id, 0, 1, DEVICE_NAME);
 	if (ret) {
@@ -778,8 +754,6 @@ static int __init dev_init(void)
 	}
 	device_create(async_class, NULL, dev_id, NULL, DEVICE_NAME);
 	printk(KERN_ALERT " Registered character driver\n");
-
-	sema_init(&event_sem, 1);	/* init mutex */
 
 	check_wq = create_workqueue("check_wq");
 	if (!check_wq) {

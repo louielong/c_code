@@ -27,6 +27,6 @@ fasync:
 all_clean: clean
 	rm -fr  *.symvers  *.ko *.order
 clean:
-	rm -fr *.o *~.core .*.cmd *.mod.c ./tmp_version \
+	rm -fr *.o *~.core .*.cmd *.mod.c .tmp_versions \
 			*.ko *.order  *.symvers fasync
 
