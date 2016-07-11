@@ -17,6 +17,8 @@ KERNERDIR=/lib/modules/`uname -r`/build
 
 PWD := $(shell pwd)
 
+all:async fasync
+
 async:
 	make -C $(KERNERDIR) M=$(PWD) modules
 

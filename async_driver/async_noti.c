@@ -24,7 +24,7 @@
 #define PORT_QSFP_DEV_START (PORT_SFP_DEV_TOTAL)
 #define PORT_QSFP_DEV_TOTAL (PORT_QSFP_DEV_START + 32 - 1)
 
-
+typedef struct {
 dev_t dev_id;			/* device num */
 struct cdev async_cdev;		/* char device */
 struct class *async_class;
@@ -32,6 +32,9 @@ struct fasync_struct *async_noti;
 
 struct workqueue_struct *check_wq;	/* work queue struct */
 struct delayed_work check_dwq;
+}dev_node;
+dev_node *psu_dev;
+
 
 typedef struct {
     int mode;
@@ -166,25 +169,27 @@ unsigned char pack_psu_status(int num)
 
 
 /* read PSU infomation
- * mode=0 init read psu info
- * mode=1 status change check mode
+ * mode=1 init read psu info
+ * mode=2 status change check mode
  */
 static void get_psu_info(unsigned char psu_status,
 	unsigned char status_rec_offest, unsigned char mode)
 {
 	unsigned char temp;
 
+	if (0 == mode) return;
+
 	info.data = 0;
 	data_id = PSU;
 
-	if (0 == mode) {	/* psu init info read mode */
+	if (1 == mode) {	/* psu init info read mode */
 		/* psu status record */
 		psu_record->status_record[status_rec_offest] = psu_status;
 		return;
 	}
 
 	temp = psu_record->status_record[status_rec_offest];
-	if (1 == mode) {	/* psu status check mode */
+	if (2 == mode) {	/* psu status check mode */
 		if ((psu_status & 0x03) != (temp & 0x03)) {
 			data_no = 1;	/* psu1 status change */
 			if ((psu_status & 0x01) < (temp & 0x01)) {
@@ -552,7 +557,7 @@ static void check_info(struct work_struct *work)
 	/* PSU */
 	rec_num = 0;
 	status = pack_psu_status(PSU_NUM);
-	get_psu_info(status, rec_num, mode);
+	get_psu_info(status, rec_num, psu_record->mode);
 
 	/* FAN 1-6 */
 	rec_num = 0;
@@ -587,7 +592,7 @@ static void check_info(struct work_struct *work)
 #endif
 	/* if have status change or first check, release signal */
 	if (swctrl_flag->mode <= 5)
-        kill_fasync(&(async_noti), PICA8_PSU_SIG, POLL_IN);
+        kill_fasync(&(psu_dev->async_noti), PICA8_PSU_SIG, POLL_IN);
 #if 0
 	if (swctrl_flag->mode == 0 || (swctrl_flag->read == 1 && psu_record->status_change > 0))
 		kill_fasync(&(async_noti), PICA8_PSU_SIG, POLL_IN);
@@ -597,14 +602,15 @@ static void check_info(struct work_struct *work)
 		kill_fasync(&(async_noti), PICA8_PORT_SIG, POLL_IN);
 #endif
 	printk(KERN_ALERT "swctrl_flag->mode = %d\n", swctrl_flag->mode);
-	++swctrl_flag->mode;
+	swctrl_flag->mode = 2;
    // psu_record->status_change = 1;
-	queue_delayed_work(check_wq, &check_dwq, 3 * HZ);
+	queue_delayed_work(psu_dev->check_wq, &psu_dev->check_dwq, 3 * HZ);
 }
 
 /* device driver open function */
 int async_open(struct inode *inode, struct file *file)
 {
+	psu_record->mode = 1;
 	printk(KERN_ALERT "async open\n");
 	return 0;
 }
@@ -703,7 +709,7 @@ int fasync(int fd, struct file *filp, int on)
 {
 	printk(KERN_ALERT "fasync_helper is calling\n");
 
-	return fasync_helper(fd, filp, on, &async_noti);
+	return fasync_helper(fd, filp, on, &psu_dev->async_noti);
 }
 
 struct file_operations fasync_fops = {
@@ -727,63 +733,70 @@ static int __init dev_init(void)
 	if (!psu_record)
 		return -ENOMEM;
 
-	ret = alloc_chrdev_region(&dev_id, 0, 1, DEVICE_NAME);
+	psu_dev = kzalloc(sizeof(dev_node), GFP_KERNEL);
+	if (!psu_dev)
+		return -ENOMEM;
+
+	ret = alloc_chrdev_region(&psu_dev->dev_id, 0, 1, PSU_DEVICE_NAME);
 	if (ret) {
 		printk(KERN_ALERT "can't get major number\n");
-		unregister_chrdev_region(dev_id, 1);
+		unregister_chrdev_region(psu_dev->dev_id, 1);
 		return ret;
 	} else {
 		printk(KERN_ALERT "get device major number success\n");
 	}
 
-	cdev_init(&async_cdev, &fasync_fops);	/* init cdev */
+	cdev_init(&psu_dev->async_cdev, &fasync_fops);	/* init cdev */
 
-	ret = cdev_add(&async_cdev, dev_id, 1);
+	ret = cdev_add(&psu_dev->async_cdev, psu_dev->dev_id, 1);
+	psu_record = kzalloc(sizeof(status_record), GFP_KERNEL);
+	if (!psu_record)
+		return -ENOMEM;
 	if (ret) {
-		printk(DEVICE_NAME " error %d adding device\n", ret);
-		unregister_chrdev_region(dev_id, 1);
+		printk(PSU_DEVICE_NAME " error %d adding device\n", ret);
+		unregister_chrdev_region(psu_dev->dev_id, 1);
 		return ret;
 	} else
-		printk(DEVICE_NAME " chardev register ok\n");
+		printk(PSU_DEVICE_NAME " chardev register ok\n");
 
-	async_class = class_create(THIS_MODULE, DEVICE_NAME);
-	if (IS_ERR(async_class)) {
+	psu_dev->async_class = class_create(THIS_MODULE, PSU_DEVICE_NAME);
+	if (IS_ERR(psu_dev->async_class)) {
 		printk("Err: failed in creating class\n");
-		unregister_chrdev_region(dev_id, 1);
+		unregister_chrdev_region(psu_dev->dev_id, 1);
 		return -1;
 	}
-	device_create(async_class, NULL, dev_id, NULL, DEVICE_NAME);
+	device_create(psu_dev->async_class, NULL, psu_dev->dev_id, NULL, PSU_DEVICE_NAME);
 	printk(KERN_ALERT " Registered character driver\n");
 
-	check_wq = create_workqueue("check_wq");
-	if (!check_wq) {
+	psu_dev->check_wq = create_workqueue("psu_check_wq");
+	if (!psu_dev->check_wq) {
 		printk(KERN_ALERT "no memory for workqueue\n");
 		return -ENOMEM;
 	}
 	printk(KERN_ALERT "create workqueue successful\n");
 
-	INIT_DELAYED_WORK(&check_dwq, check_info);
-	queue_delayed_work(check_wq, &check_dwq, 3 * HZ);
+	INIT_DELAYED_WORK(&psu_dev->check_dwq, check_info);
+	queue_delayed_work(psu_dev->check_wq, &psu_dev->check_dwq, 3 * HZ);
 
 	return ret;
 }
 
 static void __exit dev_exit(void)
 {
-	device_destroy(async_class, dev_id);
-	class_destroy(async_class);
-	unregister_chrdev_region(dev_id, 1);
-	cdev_del(&async_cdev);
+	device_destroy(psu_dev->async_class, psu_dev->dev_id);
+	class_destroy(psu_dev->async_class);
+	unregister_chrdev_region(psu_dev->dev_id, 1);
+	cdev_del(&psu_dev->async_cdev);
 
-	if (check_wq) {
-		cancel_delayed_work(&check_dwq);
-		flush_workqueue(check_wq);
-		destroy_workqueue(check_wq);
+	if (psu_dev->check_wq) {
+		cancel_delayed_work(&psu_dev->check_dwq);
+		flush_workqueue(psu_dev->check_wq);
+		destroy_workqueue(psu_dev->check_wq);
 	}
 	if (swctrl_flag)
 		kfree(swctrl_flag);
 
-	printk(DEVICE_NAME
+	printk(PSU_DEVICE_NAME
 	       " Async Notification char driver clean up\n");
 }
 

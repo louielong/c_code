@@ -2,12 +2,14 @@
 #define __PICA8_ASYNC_NOTI_H__
 
 /* device node name   /dev/swctrl */
-#define DEVICE_NAME   "swctrl"
+#define PSU_DEVICE_NAME   "swctrl_psu"
+#define FAN_DEVICE_NAME   "swctrl_fan"
+#define PORT_DEVICE_NAME  "swctrl_port"
 
-#define READ_ACK         1
-#define READ_PSU_INFO    2
-#define READ_FAN_INFO    3
-#define READ_PORT_INFO   4
+#define READ_ACK         0
+#define READ_PSU_INFO    1
+#define READ_FAN_INFO    2
+#define READ_PORT_INFO   3
 
 #define PLUG_OUT        0
 #define PLUG_IN         1
