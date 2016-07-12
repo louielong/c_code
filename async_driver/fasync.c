@@ -48,7 +48,6 @@ void psu_signal_fun(int signum)
         free(info_arr);
 #endif
     pthread_mutex_lock(&mutex);
-    sleep(10);
 	ret = read(fd, &i, sizeof(int));
 	printf("ret = %d\n", ret);
 	if (ret) {
@@ -62,21 +61,20 @@ void psu_signal_fun(int signum)
 int main(int argc, char **argv)
 {
 	unsigned char key_val;
-	int ret, Oflags;
+	int ret, Oflags, num;
 	time_t timep;
     struct sigaction act;
     sigset_t mask;
+    unsigned long msg_num;
 
 	/* open device */
-	fd = open("/dev/swctrl", O_RDWR);
+	fd = open("/dev/swctrl_psu", O_RDWR);
 	if (fd < 0) {
-		printf("can't open %s\n", DEVICE_NAME);
+		printf("can't open %s\n", PSU_DEVICE_NAME);
 		return -1;
 	} else
-		printf("%s open success\n", DEVICE_NAME);
+		printf("%s open success\n", PSU_DEVICE_NAME);
 
-	/* set signal handle function */
-	signal(PICA8_PSU_SIG, psu_signal_fun);
 	//signal(PICA8_FAN_SIG, fan_signal_fun);
 	//signal(PICA8_PORT_SIG, port_signal_fun);
 
@@ -101,9 +99,22 @@ int main(int argc, char **argv)
 
 	/* set fasync */
 	fcntl(fd, F_SETFL, Oflags | FASYNC);
-    fcntl(fd, 10, PICA8_PSU_SIG);
 
-    pthread_mutex_init(&mutex,NULL);
+    pthread_mutex_init(&mutex, NULL);
+
+    ret = ioctl(fd, READ_INIT_SYNC, &msg_num);
+    if (0 == ret) {
+        if (READ_SYNC_ACK == msg_num)
+            printf("init sync success\n");
+        else {
+            printf(" init sync failed\n");
+            return -1;
+        }
+    } else
+        printf("ioctrl failed\n");
+
+	/* set signal handle function */
+	signal(PICA8_PSU_SIG, psu_signal_fun);
 
     while (1)
 	{
