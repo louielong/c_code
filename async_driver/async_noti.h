@@ -6,10 +6,11 @@
 #define FAN_DEVICE_NAME   "swctrl_fan"
 #define PORT_DEVICE_NAME  "swctrl_port"
 
-#define READ_ACK         0
+#define READ_INIT_SYNC   0
 #define READ_PSU_INFO    1
 #define READ_FAN_INFO    2
 #define READ_PORT_INFO   3
+#define READ_SYNC_ACK    255
 
 #define PLUG_OUT        0
 #define PLUG_IN         1
@@ -21,10 +22,11 @@
 #define FANR            2
 #define PORT            3
 
-#define PICA8_PSU_SIG		SIGRTMIN+10
-#define PICA8_FAN_SIG		SIGRTMIN+2
-#define PICA8_PORT_SIG		SIGRTMIN+3
+#define PICA8_PSU_SIG		SIGIO
+#define PICA8_FAN_SIG		SIGUSR1
+#define PICA8_PORT_SIG		SIGUSR2
 
+#define MAX_MSG         64
 
 #pragma pack(1)
 typedef union {

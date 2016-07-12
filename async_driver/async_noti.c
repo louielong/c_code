@@ -5,6 +5,7 @@
 #include <linux/poll.h>
 #include <linux/cdev.h>
 #include <linux/slab.h>
+#include <linux/vmalloc.h>
 #include <linux/device.h>
 #include <linux/fcntl.h>
 #include <linux/sched.h>
@@ -25,16 +26,20 @@
 #define PORT_QSFP_DEV_TOTAL (PORT_QSFP_DEV_START + 32 - 1)
 
 typedef struct {
-dev_t dev_id;			/* device num */
-struct cdev async_cdev;		/* char device */
-struct class *async_class;
-struct fasync_struct *async_noti;
-
-struct workqueue_struct *check_wq;	/* work queue struct */
-struct delayed_work check_dwq;
+    dev_t dev_id;			/* device num */
+    struct cdev async_cdev;		/* char device */
+    struct class *async_class;
+    struct fasync_struct *async_noti;
 }dev_node;
 dev_node *psu_dev;
+dev_node *fan_dev;
+dev_node *port_dev;
 
+typedef struct {
+    struct workqueue_struct *check_wq;	/* work queue struct */
+    struct delayed_work check_dwq;
+}wk_que;
+wk_que *wk_que_ck;
 
 typedef struct {
     int mode;
@@ -47,12 +52,13 @@ typedef struct {
     int mode;
     unsigned char status_record[16];      /* record device status */
     unsigned int status_change;       /* status change count number */
-    unsigned int status_change_arr[64];  /* record device status change arr */
-}status_record;
+    unsigned int status_change_arr[MAX_MSG];  /* record device status change arr */
+}sta_record;
 
-status_record *psu_record;
-status_record *fan_record;
-status_record *port_record;
+sta_record *psu_record;
+sta_record *fan_record;
+sta_record *port_record;
+
 #if 0
 /* msg record array */
 static void add_hardware_info(status_info hw_info, status_record *record)
@@ -184,11 +190,11 @@ static void get_psu_info(unsigned char psu_status,
 
 	if (1 == mode) {	/* psu init info read mode */
 		/* psu status record */
-		psu_record->status_record[status_rec_offest] = psu_status;
+		psu_record.status_record[status_rec_offest] = psu_status;
 		return;
 	}
 
-	temp = psu_record->status_record[status_rec_offest];
+	temp = psu_record.status_record[status_rec_offest];
 	if (2 == mode) {	/* psu status check mode */
 		if ((psu_status & 0x03) != (temp & 0x03)) {
 			data_no = 1;	/* psu1 status change */
@@ -230,7 +236,7 @@ static void get_psu_info(unsigned char psu_status,
 			}
 		}
 		/* psu status record */
-		psu_record->status_record[status_rec_offest] = psu_status;
+		psu_record.status_record[status_rec_offest] = psu_status;
 	}
 }
 
@@ -544,6 +550,8 @@ static void get_port_info(unsigned char port_status,
 	}
 }
 #endif
+
+
 /* hardware check workqueue function */
 static void check_info(struct work_struct *work)
 {
@@ -591,8 +599,8 @@ static void check_info(struct work_struct *work)
 	}
 #endif
 	/* if have status change or first check, release signal */
-	if (swctrl_flag->mode <= 5)
-        kill_fasync(&(psu_dev->async_noti), PICA8_PSU_SIG, POLL_IN);
+	//if (swctrl_flag->mode <= 5)
+        //kill_fasync(&(psu_dev.async_noti), PICA8_PSU_SIG, POLL_IN);
 #if 0
 	if (swctrl_flag->mode == 0 || (swctrl_flag->read == 1 && psu_record->status_change > 0))
 		kill_fasync(&(async_noti), PICA8_PSU_SIG, POLL_IN);
@@ -601,94 +609,73 @@ static void check_info(struct work_struct *work)
 	if (port_record->status_change > 0 || swctrl_flag->mode == 0)
 		kill_fasync(&(async_noti), PICA8_PORT_SIG, POLL_IN);
 #endif
-	printk(KERN_ALERT "swctrl_flag->mode = %d\n", swctrl_flag->mode);
-	swctrl_flag->mode = 2;
+	//printk(KERN_ALERT "psu_record->mode = %d\n", psu_record->mode);
+	printk(KERN_ALERT "psu_record->mode = %d\n", 2);
+	//if (psu_record->mode == 1)
+    //    psu_record->mode = 2;
+    //swctrl_flag->mode = 2;
    // psu_record->status_change = 1;
-	queue_delayed_work(psu_dev->check_wq, &psu_dev->check_dwq, 3 * HZ);
+	queue_delayed_work(wk_que_ck->check_wq, &wk_que_ck->check_dwq, 3 * HZ);
 }
 
-/* device driver open function */
-int async_open(struct inode *inode, struct file *file)
+
+/************************************************************************/
+/*                    PSU device driver                                 */
+/************************************************************************/
+/* PSU device driver open function */
+int psu_dev_open(struct inode *inode, struct file *file)
 {
-	psu_record->mode = 1;
-	printk(KERN_ALERT "async open\n");
+	printk(KERN_ALERT "PSU async open\n");
 	return 0;
 }
 
-/* device driver read function */
-ssize_t async_read(struct file * file, char __user * buf, size_t size,
+/* PSU device driver read function */
+ssize_t psu_dev_read(struct file * file, char __user * buf, size_t size,
 		   loff_t * ppos)
 {
 	int tmp = 0;
 
-	printk(KERN_ALERT "async read\n");
-	if (swctrl_flag->mode > 0) {
-        tmp = copy_to_user(buf, &(swctrl_flag->mode), sizeof(int));
+	printk(KERN_ALERT "PSU dev read\n");
+	if (psu_record->mode == 1) {
+        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int));
 	    if (tmp) {
 		    return -EFAULT;
 	    }
 	}
 
-#if 0
-	if (swctrl_flag->read == 1 && psu_record->status_change > 0) {
+	if (psu_record->status_change > 0) {
 	    if (copy_to_user(buf, psu_record->status_change_arr,\
 			sizeof(unsigned int) * psu_record->status_change)) {
 		    return -EFAULT;
 	    }
 	    tmp = psu_record->status_change;
 	    psu_record->status_change = 0;
+        memset(psu_record->status_change_arr, 0, MAX_MSG);
 	}
-	if (swctrl_flag->who_read == FAN && fan_record->status_change > 0) {
-	    if (copy_to_user(buf, fan_record->status_change_arr,\
-			sizeof(unsigned int) * fan_record->status_change)) {
-		    return -EFAULT;
-	    }
-	    tmp = psu_record->status_change;
-	    fan_record->status_change = 0;
-	}
-
-	if (swctrl_flag->who_read == PORT && port_record->status_change > 0) {
-	    if (copy_to_user(buf, port_record->status_change_arr,\
-			sizeof(unsigned int) * port_record->status_change)) {
-		    return -EFAULT;
-	    }
-	    tmp = psu_record->status_change;
-	    port_record->status_change = 0;
-	}
-#endif
 
 	return tmp;
 }
 
-/* device driver ioctl function */
-long async_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+/* PSU device driver ioctl function */
+long psu_dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	long ret = 0;
-    int a = 255;
 
-	printk(KERN_ALERT "async ioctl\n");
+	printk(KERN_ALERT "PSU dev ioctl\n");
 
 	switch (cmd) {
-	case READ_ACK:	/* get signal acknowledgement */
-		swctrl_flag->read = 1;
-		ret = put_user(a, (unsigned long __user *)arg);
+	case READ_INIT_SYNC:	/* init sync */
+		/* init psu_record->data */
+        psu_record->mode = 1;
+        psu_record->status_change = 0;
+        memset(psu_record->status_record, 0, 16);
+        memset(psu_record->status_change_arr, 0, MAX_MSG);
+		ret = put_user(READ_SYNC_ACK, (unsigned long __user *)arg);
 		break;
 	case READ_PSU_INFO:	/* get psu info number */
 		ret = put_user(psu_record->status_change, \
 			       (unsigned long __user *)arg);
 		break;
-#if 0
-	case READ_FAN_INFO:	/* get fan info number */
-		ret = put_user(fan_record->status_change, \
-			       (unsigned long __user *)arg);
-		swctrl_flag->who_read = FAN;
-		break;
-	case READ_PORT_INFO:	/* get port info number */
-		ret = put_user(port_record->status_change, \
-			       (unsigned long __user *)arg);
-		swctrl_flag->who_read = PORT;
-		break;
-#endif
 	default:
 		return -EINVAL;
 	}
@@ -696,47 +683,289 @@ long async_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return ret;
 }
 
-/* device driver close function */
-int async_release(struct inode *inode, struct file *file)
+/* PSU device driver close function */
+int psu_dev_release(struct inode *inode, struct file *file)
 {
-	printk(KERN_ALERT "async close\n");
+	/* clean psu_record->data */
+    psu_record->mode = 0;
+    psu_record->status_change = 0;
+    memset(psu_record->status_record, 0, 16);
+    memset(psu_record->status_change_arr, 0, MAX_MSG);
+    printk(KERN_ALERT "PSU dev close\n");
 
 	return 0;
 }
 
-/* info fasync function */
-int fasync(int fd, struct file *filp, int on)
+/* PSU fasync function */
+int psu_dev_fasync(int fd, struct file *filp, int on)
 {
-	printk(KERN_ALERT "fasync_helper is calling\n");
+	printk(KERN_ALERT "PSU fasync_helper is calling\n");
 
 	return fasync_helper(fd, filp, on, &psu_dev->async_noti);
 }
 
-struct file_operations fasync_fops = {
+/* PSU file struct */
+struct file_operations psu_dev_fops = {
 	.owner = THIS_MODULE,
-	.open = async_open,
-	.read = async_read,
-	.release = async_release,
-	.fasync = fasync,
-	.unlocked_ioctl = async_ioctl,
+	.open = psu_dev_open,
+	.read = psu_dev_read,
+	.release = psu_dev_release,
+	.fasync = psu_dev_fasync,
+	.unlocked_ioctl = psu_dev_ioctl,
 };
+
+/************************************************************************/
+/*                    FAN device driver                                 */
+/************************************************************************/
+/* FAN device driver open function */
+int fan_dev_open(struct inode *inode, struct file *file)
+{
+	printk(KERN_ALERT "FAN async open\n");
+	return 0;
+}
+
+/* FAN device driver read function */
+ssize_t fan_dev_read(struct file * file, char __user * buf, size_t size,
+		   loff_t * ppos)
+{
+	int tmp = 0;
+
+	printk(KERN_ALERT "FAN async read\n");
+	if (fan_record->mode == 1) {
+        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int));
+	    if (tmp) {
+		    return -EFAULT;
+	    }
+	}
+
+	if (fan_record->status_change > 0) {
+	    if (copy_to_user(buf, fan_record->status_change_arr,\
+			sizeof(unsigned int) * fan_record->status_change)) {
+		    return -EFAULT;
+	    }
+	    tmp = fan_record->status_change;
+	    fan_record->status_change = 0;
+        memset(fan_record->status_change_arr, 0, MAX_MSG);
+	}
+
+	return tmp;
+}
+
+/* FAN device driver ioctl function */
+long fan_dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	long ret = 0;
+
+	printk(KERN_ALERT "FAN async ioctl\n");
+
+	switch (cmd) {
+	case READ_INIT_SYNC:	/* init sync */
+		/* init fan_record data */
+        fan_record->mode = 1;
+        fan_record->status_change = 0;
+        memset(fan_record->status_record, 0, 16);
+        memset(fan_record->status_change_arr, 0, MAX_MSG);
+		ret = put_user(READ_SYNC_ACK, (unsigned long __user *)arg);
+		break;
+	case READ_FAN_INFO:	/* get fan info number */
+		ret = put_user(fan_record->status_change, \
+			       (unsigned long __user *)arg);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return ret;
+}
+
+/* FAN device driver close function */
+int fan_dev_release(struct inode *inode, struct file *file)
+{
+	/* clean fan_record data */
+    fan_record->mode = 0;
+    fan_record->status_change = 0;
+    memset(fan_record->status_record, 0, 16);
+    memset(fan_record->status_change_arr, 0, MAX_MSG);
+
+    printk(KERN_ALERT "FAN async close\n");
+
+	return 0;
+}
+
+/* FAN fasync function */
+int fan_dev_fasync(int fd, struct file *filp, int on)
+{
+	printk(KERN_ALERT "FAN fasync_helper is calling\n");
+
+	return fasync_helper(fd, filp, on, &fan_dev->async_noti);
+}
+
+/* FAN file struct */
+struct file_operations fan_dev_fops = {
+	.owner = THIS_MODULE,
+	.open = fan_dev_open,
+	.read = fan_dev_read,
+	.release = fan_dev_release,
+	.fasync = fan_dev_fasync,
+	.unlocked_ioctl = fan_dev_ioctl,
+};
+
+
+/************************************************************************/
+/*                    PORT device driver                                 */
+/************************************************************************/
+/* PORT device driver open function */
+int port_dev_open(struct inode *inode, struct file *file)
+{
+	printk(KERN_ALERT "PORT async open\n");
+	return 0;
+}
+
+/* PORT device driver read function */
+ssize_t port_dev_read(struct file * file, char __user * buf, size_t size,
+		   loff_t * ppos)
+{
+	int tmp = 0;
+
+	printk(KERN_ALERT "PORT async read\n");
+	if (port_record->mode == 1) {
+        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int));
+	    if (tmp) {
+		    return -EFAULT;
+	    }
+	}
+
+	if (port_record->status_change > 0) {
+	    if (copy_to_user(buf, port_record->status_change_arr,\
+			sizeof(unsigned int) * port_record->status_change)) {
+		    return -EFAULT;
+	    }
+	    tmp = port_record->status_change;
+	    port_record->status_change = 0;
+        memset(port_record->status_change_arr, 0, MAX_MSG);
+	}
+
+	return tmp;
+}
+
+/* PORT device driver ioctl function */
+long port_dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	long ret = 0;
+
+	printk(KERN_ALERT "PORT async ioctl\n");
+
+	switch (cmd) {
+	case READ_INIT_SYNC:	/* init sync */
+		/* init port_record data */
+        port_record->mode = 1;
+        port_record->status_change = 0;
+        memset(port_record->status_record, 0, 16);
+        memset(port_record->status_change_arr, 0, MAX_MSG);
+		ret = put_user(READ_SYNC_ACK, (unsigned long __user *)arg);
+		break;
+	case READ_PORT_INFO:	/* get port info number */
+		ret = put_user(port_record->status_change, \
+			       (unsigned long __user *)arg);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return ret;
+}
+
+/* PORT device driver close function */
+int port_dev_release(struct inode *inode, struct file *file)
+{
+	/* clean port_record data */
+    port_record->mode = 0;
+    port_record->status_change = 0;
+    memset(port_record->status_record, 0, 16);
+    memset(port_record->status_change_arr, 0, MAX_MSG);
+
+    printk(KERN_ALERT "PORT async close\n");
+
+	return 0;
+}
+
+/* PORT fasync function */
+int port_dev_fasync(int fd, struct file *filp, int on)
+{
+	printk(KERN_ALERT "PORT fasync_helper is calling\n");
+
+	return fasync_helper(fd, filp, on, &port_dev->async_noti);
+}
+
+/* PORT file struct */
+struct file_operations port_dev_fops = {
+	.owner = THIS_MODULE,
+	.open = port_dev_open,
+	.read = port_dev_read,
+	.release = port_dev_release,
+	.fasync = port_dev_fasync,
+	.unlocked_ioctl = port_dev_ioctl,
+};
+
+
+static int PICA8_device_init(sta_record **dev_record, dev_node **dev_node,
+        char* dev_name, struct file_operations dev_fops)
+{
+    int ret;
+
+    *dev_record = kzalloc(sizeof(sta_record), GFP_KERNEL);
+	if (!*dev_record)
+		return -ENOMEM;
+    *dev_node = kzalloc(sizeof(dev_node), GFP_KERNEL);
+	if (!dev_node)
+		return -ENOMEM;
+	ret = alloc_chrdev_region(&(*dev_node)->dev_id, 0, 1, dev_name);
+	if (ret) {
+		printk(KERN_ALERT "can't get major number\n");
+		unregister_chrdev_region((*dev_node)->dev_id, 1);
+		return ret;
+	}
+
+    cdev_init(&(*dev_node)->async_cdev, &dev_fops);	/* init cdev */
+
+	ret = cdev_add(&(*dev_node)->async_cdev, (*dev_node)->dev_id, 1);
+	if (ret) {
+		printk(KERN_ALERT " error %d adding device\n", ret);
+		unregister_chrdev_region((*dev_node)->dev_id, 1);
+		return ret;
+	}
+
+	(*dev_node)->async_class = class_create(THIS_MODULE, dev_name);
+	if (IS_ERR((*dev_node)->async_class)) {
+		printk("Err: failed in creating class\n");
+		unregister_chrdev_region((*dev_node)->dev_id, 1);
+		return -1;
+	}
+
+	device_create((*dev_node)->async_class, NULL, (*dev_node)->dev_id, NULL, dev_name);
+	printk(KERN_ALERT " Registered %s character driver\n", dev_name);
+
+    return 0;
+}
+
+
 
 static int __init dev_init(void)
 {
-	int ret;
+	int ret=0;
 
 	swctrl_flag = kzalloc(sizeof(read_flag), GFP_KERNEL);
 	if (!swctrl_flag)
 		return -ENOMEM;
 
-	psu_record = kzalloc(sizeof(status_record), GFP_KERNEL);
+#if 0
+    psu_record = kzalloc(sizeof(sta_record), GFP_KERNEL);
 	if (!psu_record)
 		return -ENOMEM;
 
-	psu_dev = kzalloc(sizeof(dev_node), GFP_KERNEL);
+    psu_dev = kzalloc(sizeof(dev_node), GFP_KERNEL);
 	if (!psu_dev)
 		return -ENOMEM;
-
 	ret = alloc_chrdev_region(&psu_dev->dev_id, 0, 1, PSU_DEVICE_NAME);
 	if (ret) {
 		printk(KERN_ALERT "can't get major number\n");
@@ -745,13 +974,8 @@ static int __init dev_init(void)
 	} else {
 		printk(KERN_ALERT "get device major number success\n");
 	}
-
-	cdev_init(&psu_dev->async_cdev, &fasync_fops);	/* init cdev */
-
+	cdev_init(&psu_dev->async_cdev, &psu_dev_fops);	/* init cdev */
 	ret = cdev_add(&psu_dev->async_cdev, psu_dev->dev_id, 1);
-	psu_record = kzalloc(sizeof(status_record), GFP_KERNEL);
-	if (!psu_record)
-		return -ENOMEM;
 	if (ret) {
 		printk(PSU_DEVICE_NAME " error %d adding device\n", ret);
 		unregister_chrdev_region(psu_dev->dev_id, 1);
@@ -767,31 +991,58 @@ static int __init dev_init(void)
 	}
 	device_create(psu_dev->async_class, NULL, psu_dev->dev_id, NULL, PSU_DEVICE_NAME);
 	printk(KERN_ALERT " Registered character driver\n");
+#endif
 
-	psu_dev->check_wq = create_workqueue("psu_check_wq");
-	if (!psu_dev->check_wq) {
+    PICA8_device_init(&psu_record, &psu_dev, PSU_DEVICE_NAME, psu_dev_fops);
+    PICA8_device_init(&fan_record, &fan_dev, FAN_DEVICE_NAME, fan_dev_fops);
+    PICA8_device_init(&port_record, &port_dev, PORT_DEVICE_NAME, port_dev_fops);
+
+	wk_que_ck = kzalloc(sizeof(wk_que), GFP_KERNEL);
+	if (!wk_que_ck)
+		return -ENOMEM;
+
+	wk_que_ck->check_wq = create_workqueue("check_info");
+	if (!wk_que_ck->check_wq) {
 		printk(KERN_ALERT "no memory for workqueue\n");
 		return -ENOMEM;
-	}
-	printk(KERN_ALERT "create workqueue successful\n");
+	} else
+	    printk(KERN_ALERT "create workqueue successful\n");
 
-	INIT_DELAYED_WORK(&psu_dev->check_dwq, check_info);
-	queue_delayed_work(psu_dev->check_wq, &psu_dev->check_dwq, 3 * HZ);
+	INIT_DELAYED_WORK(&wk_que_ck->check_dwq, check_info);
+	queue_delayed_work(wk_que_ck->check_wq, &wk_que_ck->check_dwq, 3 * HZ);
 
-	return ret;
+    return ret;
+}
+
+static void PICA8_device_exit(sta_record **dev_record, dev_node **dev_node)
+{
+    if (*dev_record)
+        kfree(*dev_record);
+
+    if (*dev_node) {
+	    device_destroy((*dev_node)->async_class, (*dev_node)->dev_id);
+	    class_destroy((*dev_node)->async_class);
+	    unregister_chrdev_region((*dev_node)->dev_id, 1);
+	    cdev_del(&(*dev_node)->async_cdev);
+    }
 }
 
 static void __exit dev_exit(void)
 {
+#if 1
 	device_destroy(psu_dev->async_class, psu_dev->dev_id);
 	class_destroy(psu_dev->async_class);
 	unregister_chrdev_region(psu_dev->dev_id, 1);
 	cdev_del(&psu_dev->async_cdev);
+#endif
+    PICA8_device_exit(&psu_record, &psu_dev);
+    PICA8_device_exit(&fan_record, &fan_dev);
+    PICA8_device_exit(&port_record, &port_dev);
 
-	if (psu_dev->check_wq) {
-		cancel_delayed_work(&psu_dev->check_dwq);
-		flush_workqueue(psu_dev->check_wq);
-		destroy_workqueue(psu_dev->check_wq);
+	if (wk_que_ck->check_wq) {
+		cancel_delayed_work(&wk_que_ck->check_dwq);
+		flush_workqueue(wk_que_ck->check_wq);
+		destroy_workqueue(wk_que_ck->check_wq);
 	}
 	if (swctrl_flag)
 		kfree(swctrl_flag);
