@@ -43,12 +43,13 @@ wk_que *wk_que_ck;
 
 typedef struct {
     int mode;
-    char read;
+    char read_ok;
 }read_flag;
 read_flag *swctrl_flag;
 
 /* msg record struct */
 typedef struct {
+    char read_ok;
     int mode;
     unsigned char status_record[16];      /* record device status */
     unsigned int status_change;       /* status change count number */
@@ -558,9 +559,6 @@ static void check_info(struct work_struct *work)
 	//int i, num, rec_num, port_start;
 	//unsigned char status;
 
-	//if (swctrl_flag->mode != 0)
-	//	swctrl_flag->mode = 1;
-
 #if 0
 	/* PSU */
 	rec_num = 0;
@@ -599,25 +597,32 @@ static void check_info(struct work_struct *work)
 	}
 #endif
 	/* if have status change or first check, release signal */
-	//if (swctrl_flag->mode <= 5)
-        //kill_fasync(&(psu_dev.async_noti), PICA8_PSU_SIG, POLL_IN);
+    if (psu_record->mode > 0 && psu_record->status_change > 0)
+		kill_fasync(&psu_dev->async_noti, PICA8_PSU_SIG, POLL_IN);
+	if (fan_record->mode > 0 && fan_record->status_change > 0)
+		kill_fasync(&fan_dev->async_noti, PICA8_FAN_SIG, POLL_IN);
+	if (port_record->mode > 0 && port_record->status_change > 0)
+		kill_fasync(&port_dev->async_noti, PICA8_PORT_SIG, POLL_IN);
+
 #if 0
 	if (swctrl_flag->mode == 0 || (swctrl_flag->read == 1 && psu_record->status_change > 0))
-		kill_fasync(&(async_noti), PICA8_PSU_SIG, POLL_IN);
+		kill_fasync(&psu_dev->async_noti, PICA8_PSU_SIG, POLL_IN);
 	if (fan_record->status_change > 0 || swctrl_flag->mode == 0)
-		kill_fasync(&(async_noti), PICA8_FAN_SIG, POLL_IN);
+		kill_fasync(&fan_dev->async_noti, PICA8_FAN_SIG, POLL_IN);
 	if (port_record->status_change > 0 || swctrl_flag->mode == 0)
-		kill_fasync(&(async_noti), PICA8_PORT_SIG, POLL_IN);
+		kill_fasync(&port_dev->async_noti, PICA8_PORT_SIG, POLL_IN);
 #endif
-	//printk(KERN_ALERT "psu_record->mode = %d\n", psu_record->mode);
-	printk(KERN_ALERT "psu_record->mode = %d\n", 2);
-	//if (psu_record->mode == 1)
-    //    psu_record->mode = 2;
+	printk(KERN_ALERT "psu_record->mode = %d\n", psu_record->mode);
+	if (psu_record->mode == 1)  /* change init mode to check mode */
+        psu_record->mode = 2;
+	if (fan_record->mode == 1)
+        fan_record->mode = 2;
+	if (fan_record->mode == 1)
+        fan_record->mode = 2;
     //swctrl_flag->mode = 2;
    // psu_record->status_change = 1;
 	queue_delayed_work(wk_que_ck->check_wq, &wk_que_ck->check_dwq, 3 * HZ);
 }
-
 
 /************************************************************************/
 /*                    PSU device driver                                 */
@@ -636,8 +641,11 @@ ssize_t psu_dev_read(struct file * file, char __user * buf, size_t size,
 	int tmp = 0;
 
 	printk(KERN_ALERT "PSU dev read\n");
+    if (size != psu_record->status_change)
+        return -EFAULT;
+
 	if (psu_record->mode == 1) {
-        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int));
+        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int) * psu_record->mode);
 	    if (tmp) {
 		    return -EFAULT;
 	    }
@@ -654,6 +662,15 @@ ssize_t psu_dev_read(struct file * file, char __user * buf, size_t size,
 	}
 
 	return tmp;
+}
+
+/* PSU device driver write function */
+ssize_t psu_dev_write (struct file *file, const char __user *buf, size_t size,
+        loff_t *ppos)
+{
+	printk(KERN_ALERT "PSU async read\n");
+
+    return 0;
 }
 
 /* PSU device driver ioctl function */
@@ -680,6 +697,7 @@ long psu_dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return -EINVAL;
 	}
 
+    psu_record->status_change = 1;
 	return ret;
 }
 
@@ -709,6 +727,7 @@ struct file_operations psu_dev_fops = {
 	.owner = THIS_MODULE,
 	.open = psu_dev_open,
 	.read = psu_dev_read,
+    .write = psu_dev_write,
 	.release = psu_dev_release,
 	.fasync = psu_dev_fasync,
 	.unlocked_ioctl = psu_dev_ioctl,
@@ -731,8 +750,11 @@ ssize_t fan_dev_read(struct file * file, char __user * buf, size_t size,
 	int tmp = 0;
 
 	printk(KERN_ALERT "FAN async read\n");
-	if (fan_record->mode == 1) {
-        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int));
+    if (size != psu_record->status_change)
+        return -EFAULT;
+
+    if (fan_record->mode == 1) {
+        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int) * fan_record->mode);
 	    if (tmp) {
 		    return -EFAULT;
 	    }
@@ -749,6 +771,15 @@ ssize_t fan_dev_read(struct file * file, char __user * buf, size_t size,
 	}
 
 	return tmp;
+}
+
+/* FAN device driver write function */
+ssize_t fan_dev_write (struct file *file, const char __user *buf, size_t size,
+        loff_t *ppos)
+{
+	printk(KERN_ALERT "FAN async read\n");
+
+    return 0;
 }
 
 /* FAN device driver ioctl function */
@@ -805,7 +836,8 @@ struct file_operations fan_dev_fops = {
 	.owner = THIS_MODULE,
 	.open = fan_dev_open,
 	.read = fan_dev_read,
-	.release = fan_dev_release,
+	.write = fan_dev_write,
+    .release = fan_dev_release,
 	.fasync = fan_dev_fasync,
 	.unlocked_ioctl = fan_dev_ioctl,
 };
@@ -828,8 +860,12 @@ ssize_t port_dev_read(struct file * file, char __user * buf, size_t size,
 	int tmp = 0;
 
 	printk(KERN_ALERT "PORT async read\n");
-	if (port_record->mode == 1) {
-        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int));
+
+    if (size != psu_record->status_change)
+        return -EFAULT;
+
+    if (port_record->mode == 1) {
+        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int) * fan_record->mode);
 	    if (tmp) {
 		    return -EFAULT;
 	    }
@@ -846,6 +882,15 @@ ssize_t port_dev_read(struct file * file, char __user * buf, size_t size,
 	}
 
 	return tmp;
+}
+
+/* PORT device driver write function */
+ssize_t port_dev_write (struct file *file, const char __user *buf, size_t size,
+        loff_t *ppos)
+{
+	printk(KERN_ALERT "PORT async read\n");
+
+    return 0;
 }
 
 /* PORT device driver ioctl function */
@@ -902,12 +947,13 @@ struct file_operations port_dev_fops = {
 	.owner = THIS_MODULE,
 	.open = port_dev_open,
 	.read = port_dev_read,
+    .write = port_dev_write,
 	.release = port_dev_release,
 	.fasync = port_dev_fasync,
 	.unlocked_ioctl = port_dev_ioctl,
 };
 
-
+#if 0
 static int PICA8_device_init(sta_record **dev_record, dev_node **dev_node,
         char* dev_name, struct file_operations dev_fops)
 {
@@ -947,7 +993,7 @@ static int PICA8_device_init(sta_record **dev_record, dev_node **dev_node,
 
     return 0;
 }
-
+#endif
 
 
 static int __init dev_init(void)
@@ -958,7 +1004,9 @@ static int __init dev_init(void)
 	if (!swctrl_flag)
 		return -ENOMEM;
 
-#if 0
+    /* TODO:simplify this code */
+#if 1
+    /* PSU device creat*/
     psu_record = kzalloc(sizeof(sta_record), GFP_KERNEL);
 	if (!psu_record)
 		return -ENOMEM;
@@ -971,17 +1019,15 @@ static int __init dev_init(void)
 		printk(KERN_ALERT "can't get major number\n");
 		unregister_chrdev_region(psu_dev->dev_id, 1);
 		return ret;
-	} else {
-		printk(KERN_ALERT "get device major number success\n");
-	}
+    }
+
 	cdev_init(&psu_dev->async_cdev, &psu_dev_fops);	/* init cdev */
 	ret = cdev_add(&psu_dev->async_cdev, psu_dev->dev_id, 1);
 	if (ret) {
 		printk(PSU_DEVICE_NAME " error %d adding device\n", ret);
 		unregister_chrdev_region(psu_dev->dev_id, 1);
 		return ret;
-	} else
-		printk(PSU_DEVICE_NAME " chardev register ok\n");
+	}
 
 	psu_dev->async_class = class_create(THIS_MODULE, PSU_DEVICE_NAME);
 	if (IS_ERR(psu_dev->async_class)) {
@@ -990,12 +1036,77 @@ static int __init dev_init(void)
 		return -1;
 	}
 	device_create(psu_dev->async_class, NULL, psu_dev->dev_id, NULL, PSU_DEVICE_NAME);
-	printk(KERN_ALERT " Registered character driver\n");
+	printk(KERN_ALERT " PSU device register ok\n");
+
+    /* FAN device creat */
+    fan_record = kzalloc(sizeof(sta_record), GFP_KERNEL);
+	if (!fan_record)
+		return -ENOMEM;
+
+    fan_dev = kzalloc(sizeof(dev_node), GFP_KERNEL);
+	if (!fan_dev)
+		return -ENOMEM;
+	ret = alloc_chrdev_region(&psu_dev->dev_id, 0, 1, FAN_DEVICE_NAME);
+	if (ret) {
+		printk(KERN_ALERT "can't get major number\n");
+		unregister_chrdev_region(fan_dev->dev_id, 1);
+		return ret;
+	}
+
+	cdev_init(&fan_dev->async_cdev, &fan_dev_fops);	/* init cdev */
+	ret = cdev_add(&fan_dev->async_cdev, fan_dev->dev_id, 1);
+	if (ret) {
+		printk(FAN_DEVICE_NAME " error %d adding device\n", ret);
+		unregister_chrdev_region(fan_dev->dev_id, 1);
+		return ret;
+	}
+
+	fan_dev->async_class = class_create(THIS_MODULE, FAN_DEVICE_NAME);
+	if (IS_ERR(fan_dev->async_class)) {
+		printk("Err: failed in creating class\n");
+		unregister_chrdev_region(fan_dev->dev_id, 1);
+		return -1;
+	}
+	device_create(fan_dev->async_class, NULL, fan_dev->dev_id, NULL, FAN_DEVICE_NAME);
+	printk(KERN_ALERT " PSU device register ok\n");
+
+    /* PORT device creat */
+    port_record = kzalloc(sizeof(sta_record), GFP_KERNEL);
+	if (!port_record)
+		return -ENOMEM;
+
+    port_dev = kzalloc(sizeof(dev_node), GFP_KERNEL);
+	if (!port_dev)
+		return -ENOMEM;
+	ret = alloc_chrdev_region(&port_dev->dev_id, 0, 1, PORT_DEVICE_NAME);
+	if (ret) {
+		printk(KERN_ALERT "can't get major number\n");
+		unregister_chrdev_region(port_dev->dev_id, 1);
+		return ret;
+	}
+
+	cdev_init(&port_dev->async_cdev, &port_dev_fops);	/* init cdev */
+	ret = cdev_add(&port_dev->async_cdev, port_dev->dev_id, 1);
+	if (ret) {
+		printk(PORT_DEVICE_NAME " error %d adding device\n", ret);
+		unregister_chrdev_region(port_dev->dev_id, 1);
+		return ret;
+	}
+
+	port_dev->async_class = class_create(THIS_MODULE, PORT_DEVICE_NAME);
+	if (IS_ERR(port_dev->async_class)) {
+		printk("Err: failed in creating class\n");
+		unregister_chrdev_region(port_dev->dev_id, 1);
+		return -1;
+	}
+	device_create(port_dev->async_class, NULL, port_dev->dev_id, NULL, PORT_DEVICE_NAME);
+	printk(KERN_ALERT " PORT device register ok\n");
+
 #endif
 
-    PICA8_device_init(&psu_record, &psu_dev, PSU_DEVICE_NAME, psu_dev_fops);
-    PICA8_device_init(&fan_record, &fan_dev, FAN_DEVICE_NAME, fan_dev_fops);
-    PICA8_device_init(&port_record, &port_dev, PORT_DEVICE_NAME, port_dev_fops);
+    //PICA8_device_init(&psu_record, &psu_dev, PSU_DEVICE_NAME, psu_dev_fops);
+    //PICA8_device_init(&fan_record, &fan_dev, FAN_DEVICE_NAME, fan_dev_fops);
+    //PICA8_device_init(&port_record, &port_dev, PORT_DEVICE_NAME, port_dev_fops);
 
 	wk_que_ck = kzalloc(sizeof(wk_que), GFP_KERNEL);
 	if (!wk_que_ck)
@@ -1014,6 +1125,7 @@ static int __init dev_init(void)
     return ret;
 }
 
+#if 0
 static void PICA8_device_exit(sta_record **dev_record, dev_node **dev_node)
 {
     if (*dev_record)
@@ -1026,18 +1138,35 @@ static void PICA8_device_exit(sta_record **dev_record, dev_node **dev_node)
 	    cdev_del(&(*dev_node)->async_cdev);
     }
 }
+#endif
 
 static void __exit dev_exit(void)
 {
 #if 1
-	device_destroy(psu_dev->async_class, psu_dev->dev_id);
+	/* PSU device clean */
+    if (psu_record) kfree(psu_record);
+    device_destroy(psu_dev->async_class, psu_dev->dev_id);
 	class_destroy(psu_dev->async_class);
 	unregister_chrdev_region(psu_dev->dev_id, 1);
 	cdev_del(&psu_dev->async_cdev);
+
+    /* FAN device clean */
+    if (fan_record) kfree(fan_record);
+    device_destroy(fan_dev->async_class, fan_dev->dev_id);
+	class_destroy(fan_dev->async_class);
+	unregister_chrdev_region(fan_dev->dev_id, 1);
+	cdev_del(&fan_dev->async_cdev);
+
+    /* PORT device clean */
+    if (port_record) kfree(port_record);
+    device_destroy(port_dev->async_class, port_dev->dev_id);
+	class_destroy(port_dev->async_class);
+	unregister_chrdev_region(port_dev->dev_id, 1);
+	cdev_del(&port_dev->async_cdev);
 #endif
-    PICA8_device_exit(&psu_record, &psu_dev);
-    PICA8_device_exit(&fan_record, &fan_dev);
-    PICA8_device_exit(&port_record, &port_dev);
+    //PICA8_device_exit(&psu_record, &psu_dev);
+    //PICA8_device_exit(&fan_record, &fan_dev);
+    //PICA8_device_exit(&port_record, &port_dev);
 
 	if (wk_que_ck->check_wq) {
 		cancel_delayed_work(&wk_que_ck->check_dwq);
