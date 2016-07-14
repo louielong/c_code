@@ -15,6 +15,21 @@
 int fd;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
+void analyse_port_info(unsigned int msg_data)
+{
+    info.data = msg_data;
+
+    if (PORT != data_id) return;
+    if (PLUG_OUT == data_info) {
+        //do something
+        printf("PORT change: port%d plugged in\n", data_no);
+    } else if (PLUG_OUT == data_info) {
+        //do something
+        printf("PORT change: port%d plugged out\n", data_no);
+    }
+}
+
+
 void psu_signal_fun(int signum)
 {
 	unsigned int  *info_arr;
@@ -24,19 +39,21 @@ void psu_signal_fun(int signum)
 
     if (info_arr)
 
+    printf("signal handle fun");
     pthread_mutex_lock(&mutex);
-	ret = ioctl(fd, READ_PSU_INFO, &msg_num);
+	ret = ioctl(fd, READ_PORT_INFO, &msg_num);
     if (ret < 0){
         printf("ioctrl failed\n");
         return;
     }
 
 	if (ret == 0 && msg_num > 0) {
-		info_arr = malloc(ret * sizeof(unsigned int));
+		info_arr = malloc(msg_num * sizeof(unsigned int));
 		ret = read(fd, info_arr, sizeof(int) * ret);
 		printf("info msg num: %d\n", msg_num);
 		for (i = 0; i < msg_num; ++i) {
 			printf("PSU key_val: %d\n", info_arr[i]);
+            analyse_port_info(info_arr[i]);
 		}
 	}
 
@@ -54,20 +71,14 @@ int main(int argc, char **argv)
     unsigned long msg_num;
 
 	/* open device */
-	fd = open("/dev/swctrl_psu", O_RDWR);
+	//fd = open("/dev/swctrl_psu", O_RDWR);
+	fd = open("/dev/swctrl_port", O_RDWR);
 	if (fd < 0) {
-		printf("can't open %s\n", PSU_DEVICE_NAME);
+		printf("can't open %s\n", PORT_DEVICE_NAME);
 		return -1;
 	} else
-		printf("%s open success\n", PSU_DEVICE_NAME);
+		printf("%s open success\n", PORT_DEVICE_NAME);
 
-	//signal(PICA8_FAN_SIG, fan_signal_fun);
-	//signal(PICA8_PORT_SIG, port_signal_fun);
-
-
-	/*将filp->owner设置为当前的进程
-	*filp所指向的文件可读或者可写就会给filp->owner发消息
-	*/
 	fcntl(fd, F_SETOWN, getpid());
 
 	/* get the device open method */
@@ -76,7 +87,7 @@ int main(int argc, char **argv)
 	/* set fasync */
 	fcntl(fd, F_SETFL, Oflags | FASYNC);
 
-    pthread_mutex_init(&mutex, NULL);
+    pthread_mutex_init(&mutex, NULL); /* init mutex */
 
     ret = ioctl(fd, READ_INIT_SYNC, &msg_num);
     if (0 == ret) {
@@ -90,6 +101,7 @@ int main(int argc, char **argv)
         printf("ioctrl failed\n");
 
 	/* set signal handle function */
+	//signal(PICA8_PORT_SIG, psu_signal_fun);
 	signal(PICA8_PSU_SIG, psu_signal_fun);
 
     while (1)

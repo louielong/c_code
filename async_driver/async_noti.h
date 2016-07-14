@@ -26,11 +26,11 @@
 #define PICA8_FAN_SIG		SIGUSR1
 #define PICA8_PORT_SIG		SIGUSR2
 
-#define MAX_MSG         64
+#define MAX_MSG         128
 
 #pragma pack(1)
 typedef union {
-	uint32_t data;
+	unsigned int data;
 	struct {
 		unsigned char id;
 		unsigned short num;
