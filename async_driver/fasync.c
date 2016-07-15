@@ -20,12 +20,12 @@ void analyse_port_info(unsigned int msg_data)
     info.data = msg_data;
 
     if (PORT != data_id) return;
-    if (PLUG_OUT == data_info) {
+    if (PLUG_IN == data_info) {
         //do something
         printf("PORT change: port%d plugged in\n", data_no);
     } else if (PLUG_OUT == data_info) {
         //do something
-        printf("PORT change: port%d plugged out\n", data_no);
+       // printf("PORT change: port%d plugged out\n", data_no);
     }
 }
 
@@ -36,10 +36,9 @@ void psu_signal_fun(int signum)
 	int i, ret;
     unsigned long msg_num;
 
-
     if (info_arr)
 
-    printf("signal handle fun");
+    printf("signal handle fun\n");
     pthread_mutex_lock(&mutex);
 	ret = ioctl(fd, READ_PORT_INFO, &msg_num);
     if (ret < 0){
@@ -49,10 +48,21 @@ void psu_signal_fun(int signum)
 
 	if (ret == 0 && msg_num > 0) {
 		info_arr = malloc(msg_num * sizeof(unsigned int));
-		ret = read(fd, info_arr, sizeof(int) * ret);
-		printf("info msg num: %d\n", msg_num);
-		for (i = 0; i < msg_num; ++i) {
-			printf("PSU key_val: %d\n", info_arr[i]);
+		if (!info_arr) {
+            printf("No memory\n");
+            return;
+        }
+
+        ret = read(fd, info_arr, sizeof(unsigned int) * msg_num);
+        if (ret < 0) {
+            printf("msg_num is not correct\n");
+            return;
+        } else if (ret != msg_num)
+		    printf("info msg num left %d\n", ret);
+
+		printf("MSG num : %d\n", msg_num);
+        for (i = 0; i < msg_num; ++i) {
+			//printf("PORT key_val: 0x%x\n", info_arr[i]);
             analyse_port_info(info_arr[i]);
 		}
 	}

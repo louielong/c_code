@@ -27,6 +27,9 @@
 #define PORT_QSFP_DEV_TOTAL (PORT_QSFP_DEV_START + 32 - 1)
 
 #define PORT_PATH       "/sys/devices/virtual/swmon/ports/port"
+#define PSU_MAJOR       231
+#define FAN_MAJOR       232
+#define PORT_MAJOR      233
 
 
 typedef struct {
@@ -516,7 +519,7 @@ static int get_one_sfp_present(int port_num)
 
     if (value < 0) {
 	    printk(KERN_ALERT "get port%d present status failed\n", port_num);
-	    return 1;
+	    return 0;
     }
 
     if (!strcmp(buf_tmp, "0"))
@@ -555,7 +558,6 @@ static unsigned char pack_sfp_status(int offest, int num)
 	    /* (tmp << i) & shift -> shift tmp bit 0 to bit i and get bit i */
 	    status = (status & (~shift)) | ((tmp[i] << i) & shift);
     }
-    //printk(KERN_ALERT "pack sfp offest %d status 0x%x", offest, status);
 
     return status;
 }
@@ -638,16 +640,16 @@ static unsigned char pack_qsfp_status(int offest, int num)
      */
 
     for (i = 0; i < num; ++i) {
-	tmp[i] = get_one_qsfp_present(i + 8 * offest + 1);
+	    tmp[i] = get_one_qsfp_present(i + 8 * offest + 1);
     }
 
     status = 0;
     for (i = 0; i < num; ++i) {
-	shift = 0x01;
-	shift = shift << i;
-	/* status & (~shift) -> clear bit i in status */
-	/* (tmp << i) & shift -> shift tmp bit 0 to bit i and get bit i */
-	status = (status & (~shift)) | ((tmp[i] << i) & shift);
+	    shift = 0x01;
+	    shift = shift << i;
+	    /* status & (~shift) -> clear bit i in status */
+	    /* (tmp << i) & shift -> shift tmp bit 0 to bit i and get bit i */
+	    status = (status & (~shift)) | ((tmp[i] << i) & shift);
     }
 
     return status;
@@ -672,28 +674,28 @@ static void get_port_info(unsigned char port_status, unsigned char rec_offest,
 	if (1 == mode) {	/* init port info read mode */
 		/* port init status record */
 	    for (i = 0; i < num; ++i) {
-	        if (i + port_start >= QSFP_NUM + SFP_NUM)
+	        if (i + port_start > QSFP_NUM + SFP_NUM)
 		        break;	/* MAX port */
 
-	        shift = 0x01 << i;
-	        if (0 == (port_status & shift)) {
+	        if (0 == (port_status >> i & 0x01)) {
 		        data_info = PLUG_OUT;
 		        data_no = i + port_start;
 
 		        add_hardware_info(info, port_record);
-	        } else if (1 == (port_status & shift)) {
+	        } else if (1 == (port_status >> i & 0x01)) {
 		        data_info = PLUG_IN;
 		        data_no = i + port_start;
 
 		        add_hardware_info(info, port_record);
 	        }
-
-		    port_record->status_record[port_start + rec_offest] = port_status;
-		    return;
 	    }
+
+	    /* port status record */
+		port_record->status_record[rec_offest] = port_status;
+		return;
     }
 
-    tmp = port_record->status_record[port_start + rec_offest] = port_status;
+    tmp = port_record->status_record[rec_offest] = port_status;
     if (1 == mode) {
 	    /* port status change check mode */
 	    if (tmp == port_status)
@@ -718,7 +720,7 @@ static void get_port_info(unsigned char port_status, unsigned char rec_offest,
 	    }
 
 	    /* port status record */
-	    port_record->status_record[port_start + rec_offest] = port_status;
+	    port_record->status_record[rec_offest] = port_status;
     }
 }
 
@@ -753,6 +755,7 @@ static void check_info(struct work_struct *work)
 	    ++rec_num;
 	}
 #endif
+#if 1
     rec_offest = 0;
     port_start = 1;
     if (port_record->mode) {
@@ -771,11 +774,12 @@ static void check_info(struct work_struct *work)
             num = QSFP_NUM -i * 8;
             num = num >= 8? 8 : num;
             status = pack_qsfp_status(i, num);
-            //get_port_info(status, rec_offest, port_record->mode, num, port_start);
+            get_port_info(status, rec_offest, port_record->mode, num, port_start);
             port_start += num;
             ++rec_offest; /* the count of port in record array */
         }
     }
+#endif
 	/* if have status change or first check, release signal */
 #if 0
     if (psu_record->mode > 0 && psu_record->status_change > 0)
@@ -796,7 +800,8 @@ static void check_info(struct work_struct *work)
 #endif
 	if (port_record->mode == 1)
         port_record->mode = 2;
-	queue_delayed_work(wk_que_ck->check_wq, &wk_que_ck->check_dwq, 3 * HZ);
+
+    queue_delayed_work(wk_que_ck->check_wq, &wk_que_ck->check_dwq, 3 * HZ);
 }
 
 /************************************************************************/
@@ -1036,17 +1041,17 @@ ssize_t port_dev_read(struct file * file, char __user * buf, size_t size,
 
 	printk(KERN_ALERT "PORT async read\n");
 
-    if (size != psu_record->status_change)
+    if (size != port_record->status_change * sizeof(unsigned int))
         return -EFAULT;
 
-    if (port_record->mode == 1) {
+    /*if (port_record->mode == 1) {
         tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int) * port_record->mode);
 	    if (tmp) {
 		    return -EFAULT;
 	    }
-	}
+	}*/
 
-	if (port_record->status_change > 0) {
+    if (port_record->status_change > 0) {
 	    if (copy_to_user(buf, port_record->status_change_arr,\
 			sizeof(unsigned int) * port_record->status_change)) {
 		    return -EFAULT;
@@ -1255,13 +1260,17 @@ static int __init dev_init(void)
     port_dev = kzalloc(sizeof(dev_node), GFP_KERNEL);
 	if (!port_dev)
 		return -ENOMEM;
-	ret = alloc_chrdev_region(&port_dev->dev_id, 0, 1, PORT_DEVICE_NAME);
+
+    /* lack udev cann't creat /dev node by auto */
+#if 1
+    ret = alloc_chrdev_region(&port_dev->dev_id, 0, 1, PORT_DEVICE_NAME);
 	if (ret) {
 		printk(KERN_ALERT "can't get major number\n");
 		unregister_chrdev_region(port_dev->dev_id, 1);
 		return ret;
 	}
-
+#endif
+    //port_dev->dev_id = MKDEV(PORT_MAJOR, 0);
 	cdev_init(&port_dev->async_cdev, &port_dev_fops);	/* init cdev */
 	ret = cdev_add(&port_dev->async_cdev, port_dev->dev_id, 1);
 	if (ret) {
@@ -1283,7 +1292,7 @@ static int __init dev_init(void)
     //PICA8_device_init(&fan_record, &fan_dev, FAN_DEVICE_NAME, fan_dev_fops);
     //PICA8_device_init(&port_record, &port_dev, PORT_DEVICE_NAME, port_dev_fops);
 
-    mutex_init(&access_lock);  /* init mutex */
+    mutex_init(&access_lock);  /* init read file mutex */
 
 	wk_que_ck = kzalloc(sizeof(wk_que), GFP_KERNEL);
 	if (!wk_que_ck)
