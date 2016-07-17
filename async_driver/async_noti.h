@@ -6,9 +6,10 @@
 #define FAN_DEVICE_NAME   "swctrl_fan"
 #define PORT_DEVICE_NAME  "swctrl_port"
 
+/* The ioctl CMD can not set to 2 */
 #define READ_INIT_SYNC   0
 #define READ_PSU_INFO    1
-#define READ_FAN_INFO    2
+#define READ_FAN_INFO    4
 #define READ_PORT_INFO   3
 #define READ_SYNC_ACK    255
 
@@ -21,10 +22,6 @@
 #define FAN             1
 #define FANR            2
 #define PORT            3
-
-#define PICA8_PSU_SIG		SIGIO
-#define PICA8_FAN_SIG		SIGUSR1
-#define PICA8_PORT_SIG		SIGUSR2
 
 #define MAX_MSG         128
 

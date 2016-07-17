@@ -12,24 +12,18 @@
 #include <linux/ioctl.h>
 #include <linux/err.h>
 #include <linux/workqueue.h>
-//#include "../cpld/cpld.h"
-#include <linux/uaccess.h>
+#include "../cpld/cpld.h"
 #include "async_noti.h"
 
-#define FAN_NUM         4   	//BOX hardware FAN number
-#define SFP_NUM         48   	//BOX hardware sfp port number
-#define QSFP_NUM        6   	//BOX hardware qsfp port number
+#define FAN_NUM         5   	//BOX hardware FAN number
+#define SFP_NUM         0   	//BOX hardware sfp port number
+#define QSFP_NUM        32   	//BOX hardware qsfp port number
 #define PSU_NUM         2       //BOX hardware psu num
 
 #define PORT_SFP_DEV_START  (1)
-#define PORT_SFP_DEV_TOTAL  (PORT_SFP_DEV_START + 0)
+#define PORT_SFP_DEV_TOTAL  (PORT_SFP_DEV_START + SFP_NUM)
 #define PORT_QSFP_DEV_START (PORT_SFP_DEV_TOTAL)
-#define PORT_QSFP_DEV_TOTAL (PORT_QSFP_DEV_START + 32 - 1)
-
-#define PORT_PATH       "/sys/devices/virtual/swmon/ports/port"
-#define PSU_MAJOR       231
-#define FAN_MAJOR       232
-#define PORT_MAJOR      233
+#define PORT_QSFP_DEV_TOTAL (PORT_QSFP_DEV_START + QSFP_NUM - 1)
 
 
 typedef struct {
@@ -68,61 +62,6 @@ sta_record *fan_record;
 sta_record *port_record;
 
 
-static struct mutex access_lock;
-
-enum {
-        ACC_R,
-        ACC_W,
-        MAX_ACC_SIZE = 16,
-};
-/*access userspace data to kernel space*/
-int access_user_space(const char *name, int mode, char *buf, size_t len)
-{
-	struct file *fp;
-	mm_segment_t fs;
-	loff_t pos;
-	char *mark = NULL;
-
-	/*len max value is MAX_ACC_SIZE - 1 */
-	if (len >= MAX_ACC_SIZE)
-		len = MAX_ACC_SIZE - 1;
-
-	if (mode == ACC_R) {
-		fp = filp_open(name, O_RDONLY, S_IRUGO);
-		if (IS_ERR(fp))
-			return -ENODEV;
-
-		fs = get_fs();
-		set_fs(KERNEL_DS);
-
-		pos = 0;
-		vfs_read(fp, buf, len, &pos);
-
-		mark = strpbrk(buf, "\n");
-		if (mark)
-			*mark = '\0';
-
-		filp_close(fp, NULL);
-		set_fs(fs);
-	} else if (mode == ACC_W) {
-		fp = filp_open(name, O_WRONLY, S_IWUSR | S_IRUGO);
-		if (IS_ERR(fp))
-			return -ENODEV;
-
-		fs = get_fs();
-		set_fs(KERNEL_DS);
-
-		pos = 0;
-		vfs_write(fp, buf, len, &pos);
-
-		filp_close(fp, NULL);
-		set_fs(fs);
-	} else
-		return -1;
-
-	return 0;
-}
-
 /* msg record array */
 static int add_hardware_info(status_info hw_info, sta_record *record)
 {
@@ -132,7 +71,6 @@ static int add_hardware_info(status_info hw_info, sta_record *record)
 	return 0;
 }
 
-#if 0
 /* PSU Present CPLD 0x60
  * 0x02
  * +-------+-------+-------+-------+-------+-------+-------+-------+
@@ -149,20 +87,20 @@ static char get_one_psu_present(unsigned short cpld_addr,
 	unsigned char psu_addr, int psu_num)
 {
     int value;
-    unsigned char offest;
+    unsigned char offset;
 
     value = cpld_read(cpld_addr, psu_addr);
     if (value < 0) {
-	printk(KERN_ALERT "get psu%d present status failed\n", psu_num);
-	return 0;
+	    printk(KERN_ALERT "get psu%d present status failed\n", psu_num);
+	    return 0;
     }
 
-    offest = psu_num == 1? PSU1_PRESENT_OFFEST : PSU2_PRESENT_OFFEST;
-    value = (vaule >> offest) & 0x01;
+    offset = psu_num == 1? PSU1_PRESENT_OFFSET : PSU2_PRESENT_OFFSET;
+    value = (value >> offset) & 0x01;
     if (value == 0)
-	return 1;
+	    return 1;
     else
-	return 0;
+	    return 0;
 }
 
 
@@ -183,20 +121,20 @@ static char get_one_psu_power(unsigned short cpld_addr,
 {
 
     int value;
-    unsigned char offest;
+    unsigned char offset;
 
     value = cpld_read(cpld_addr, psu_addr);
     if (value < 0) {
-	printk(KERN_ALERT "get psu%d power status failed\n", num);
-	return 0;
+	    printk(KERN_ALERT "get psu%d power status failed\n", psu_num);
+	    return 0;
     }
 
-    offest = psu_num == 1? PSU1_OK_OFFEST : PSU2_OK_OFFEST;
-    value = (value >> offest) & 0x01;
+    offset = psu_num == 1? PSU1_OK_OFFSET : PSU2_OK_OFFSET;
+    value = (value >> offset) & 0x01;
     if (value == 1)
-	return 1;
+	    return 1;
     else
-	return 0;
+	    return 0;
 }
 
 /* pack psu status into 8-bits format
@@ -217,6 +155,7 @@ unsigned char pack_psu_status(int num)
      *
      */
 
+    memset(tmp, 0, 8 * sizeof(unsigned char));
     /* psu1 present and power status*/
     tmp[0] = get_one_psu_present(SYS_CPLD1_ADDR, PSU_STATUS_REG, 1);
     tmp[1] = get_one_psu_power(SYS_CPLD1_ADDR, PSU_STATUS_REG, 1);
@@ -227,13 +166,14 @@ unsigned char pack_psu_status(int num)
 
     status = 0;
     for (i = 0; i < 4 * num; ++i) {
-	shift = 0x01;
-	shift = shift << i;
-	/* status & (~shift) -> clear bit i in status */
-	/* (tmp << i) & shift -> shift tmp bit 0 to bit i and get bit i */
-	status = (status & (~shift)) | ((tmp[i] << i) & shift);
+	    shift = 0x01;
+	    shift = shift << i;
+	    /* status & (~shift) -> clear bit i in status */
+	    /* (tmp << i) & shift -> shift tmp bit 0 to bit i and get bit i */
+	    status = (status & (~shift)) | ((tmp[i] << i) & shift);
     }
 
+	printk(KERN_ALERT "PSU status 0x%x\n", status);
     return status;
 }
 
@@ -243,9 +183,9 @@ unsigned char pack_psu_status(int num)
  * mode=2 status change check mode
  */
 static void get_psu_info(unsigned char psu_status,
-	unsigned char status_rec_offest, unsigned char mode)
+	unsigned char status_rec_offset, unsigned char mode)
 {
-	unsigned char temp;
+	unsigned char tmp;
 
 	if (0 == mode) return;
 
@@ -253,59 +193,127 @@ static void get_psu_info(unsigned char psu_status,
 	data_id = PSU;
 
 	if (1 == mode) {	/* psu init info read mode */
+		/* psu1 status init record */
+			data_no = 1;
+			if ((psu_status & 0x01) == 0x00) {
+				data_info = PLUG_OUT;
+				add_hardware_info(info, psu_record);
+			} else if ((psu_status & 0x01) == 0x01) {
+				data_info = PLUG_IN;
+				add_hardware_info(info, psu_record);
+
+			    if ((psu_status & 0x02) == 0x02) {
+				    data_info = WORK_GOOD;
+				    add_hardware_info(info, psu_record);
+			    } else if ((psu_status & 0x02) == 0x00) {
+				    data_info = WORK_FAULT;
+				    add_hardware_info(info, psu_record);
+		    	}
+		    }
+
+            /* psu2 status init mode */
+			data_no = 2;
+			if ((psu_status & 0x10) == 0x00) {
+				data_info = PLUG_OUT;
+				add_hardware_info(info, psu_record);
+			} else if ((psu_status & 0x10) == 0x10) {
+				data_info = PLUG_IN;
+				add_hardware_info(info, psu_record);
+
+			    if ((psu_status & 0x20) == 0x20) {
+				    data_info = WORK_GOOD;
+				    add_hardware_info(info, psu_record);
+			    } else if ((psu_status & 0x20) == 0x00) {
+				    data_info = WORK_FAULT;
+				    add_hardware_info(info, psu_record);
+			}
+		}
+
 		/* psu status record */
-		psu_record.status_record[status_rec_offest] = psu_status;
+        psu_record->status_record[status_rec_offset] = psu_status;
 		return;
 	}
 
-	temp = psu_record.status_record[status_rec_offest];
+	tmp = psu_record->status_record[status_rec_offset];
 	if (2 == mode) {	/* psu status check mode */
-		if ((psu_status & 0x03) != (temp & 0x03)) {
+		if ((psu_status & 0x03) != (tmp & 0x03)) {
 			data_no = 1;	/* psu1 status change */
-			if ((psu_status & 0x01) < (temp & 0x01)) {
+			if ((psu_status & 0x01) < (tmp & 0x01)) {
 				/* psu1 present status present -> not present */
 				data_info = PLUG_OUT;
 				add_hardware_info(info, psu_record);
-			}
-		} else if ((psu_status & 0x01) > (temp & 0x01)) {
-			/* psu1 present status not present -> present */
-			if ((psu_status & 0x02) > (temp & 0x02)) {
-				/* psu1 work status fail -> good */
-				data_info = WORK_GOOD;
-				add_hardware_info(info, psu_record);
-			} else if ((psu_status & 0x02) < (temp & 0x02)) {
-				/* psu1 work status good -> fail */
-				data_info = WORK_FAULT;
-				add_hardware_info(info, psu_record);
-			}
-		}
+			} else if ((psu_status & 0x01) > (tmp & 0x01)) {
+			    /* psu1 present status not present -> present */
+			    data_info = PLUG_IN;
+			    add_hardware_info(info, psu_record);
 
-		if ((psu_status & 0x30) != (temp & 0x30)) {
+                if ((psu_status & 0x02) == 0x02) {
+				    data_info = WORK_GOOD;
+				    add_hardware_info(info, psu_record);
+			    } else if ((psu_status & 0x02) == 0x00) {
+				    data_info = WORK_FAULT;
+				    add_hardware_info(info, psu_record);
+			    }
+		    }
+        }
+
+		if ((psu_status & 0x30) != (tmp & 0x30)) {
 			data_no = 2;	/* psu2 status change */
-			if ((psu_status & 0x10) < (temp & 0x10)) {
+			if ((psu_status & 0x10) < (tmp & 0x10)) {
 				/* psu2 present status present -> not present */
 				data_info = PLUG_OUT;
 				add_hardware_info(info, psu_record);
-			}
-		} else if ((psu_status & 0x10) > (temp & 0x10)) {
-			/* psu2 present status not present -> present */
-			if ((psu_status & 0x20) > (temp & 0x20)) {
-				/* psu2 work status fail -> good */
-				data_info = WORK_GOOD;
-				add_hardware_info(info, psu_record);
-			} else if ((psu_status & 0x20) < (temp & 0x20)) {
-				/* psu2 work status good -> fail */
-				data_info = WORK_FAULT;
-				add_hardware_info(info, psu_record);
-			}
-		}
+			} else if ((psu_status & 0x10) > (tmp & 0x10)) {
+			    /* psu2 present status not present -> present */
+			    data_info = PLUG_IN;
+			    add_hardware_info(info, psu_record);
+
+                if ((psu_status & 0x20) == 0x20) {
+				    data_info = WORK_GOOD;
+				    add_hardware_info(info, psu_record);
+			    } else if ((psu_status & 0x20) == 0x00) {
+				    data_info = WORK_FAULT;
+				    add_hardware_info(info, psu_record);
+			    }
+		    }
+        }
 		/* psu status record */
-		psu_record.status_record[status_rec_offest] = psu_status;
+		psu_record->status_record[status_rec_offset] = psu_status;
 	}
 }
 
 #ifdef FAN_PRESENT
 /* FAN Present CPLD1 0X60
+ * FAN  0x0C
+ * FANR 0x17
+ *
+ * Get fan present status
+ * return 1 when fan is present, 0 when fan is not present, -1 when failed
+ */
+static char get_one_fan_present(unsigned short cpld_addr, int fan_num,
+	int fan_loc)
+{
+    int value;
+    unsigned char offset;
+
+    offset = fan_num - 1;
+    //value = cpld_read(cpld_addr, FAN_PRESENT_REG);
+
+    if (value < 0) {
+	    printk(KERN_ALERT "get fan%d present failed\n", fan_num);
+    	return 0;
+    }
+
+    value = (value >> offset) & 0x01;
+    if (value == 0)
+	    return 1;
+    else
+	    return 0;
+}
+#endif
+
+#ifdef FAN_OK
+/* FAN Power CPLD 0x60
  * FAN  0x0C
  * FANR 0x17
  * +-------+-------+-------+-------+-------+-------+-------+-------+
@@ -315,67 +323,39 @@ static void get_psu_info(unsigned char psu_status,
  * |       |       | PRSNT | PRSNT | PRSNT | PRSNT | PRSNT | PRSNT |
  * +-------+-------+-------+-------+-------+-------+-------+-------+
  *
- * Get fan present status
- * return 1 when fan is present, 0 when fan is not present, -1 when failed
- */
-static char get_one_fan_present(unsigned short cpld_addr, int fan_num,
-	int fan_loc)
-{
-    int value;
-    unsigned char offest;
-
-    offest = fan_num - 1;
-    value = cpld_read(cpld_addr, FAN_PRESENT_REG);
-
-    if (value < 0) {
-	printk(KERN_ALERT "get fan%d present failed\n", fan_num);
-	return 1;
-    }
-
-    value = (value >> offest) & 0x01;
-    if (value == 0)
-	return 0;
-    else
-	return 1;
-}
-#endif
-
-#ifdef FAN_OK
-/* FAN Power
- *
  * Get fan power status
  * return 0 when fan work normally, 1 when fan work abnormally, -1 when failed
  */
 static char get_one_fan_power(unsigned short cpld_addr, int num, int fan_loc)
 {
     int value;
-    unsigned char offest, fan_base_reg;
+    unsigned char offset, fan_base_reg;
 
     fan_base_reg = fan_loc == 1? FAN_FAULT_REG : FANR_FAULT_REG;
 
     value = cpld_read(cpld_addr, fan_base_reg);
 
     if (value < 0) {
-	printk(KERN_ALERT "get fan%d power status failed\n", num);
-	return 0;
+	    printk(KERN_ALERT "get fan%d power status failed\n", num);
+	    return 1;
     }
 
-    offest = num - 1;
-    value = (value >> offest) & 0x01;
+    offset = num - 1;
+    value = (value >> offset) & 0x01;
     if (value == 0)
-	return 0;
+	    return 0;
     else
-	return 1;
+	    return 1;
 }
 #endif
 
 /* pack fan status into 8-bits format
  * return 8-bits fan status info
  */
-unsigned char pack_fan_status(int offest, int num, int fan_loc)
+unsigned char pack_fan_status(int offset, int num, int fan_loc)
 {
     int i;
-    unsigned char status, tmp[8] = 0, shift;
+    unsigned char status, tmp[8], shift;
 
     /*
      * fan standard format
@@ -388,36 +368,38 @@ unsigned char pack_fan_status(int offest, int num, int fan_loc)
      *
      */
 
+    memset(tmp, 0, 8 * sizeof(unsigned char));
 #ifdef FAN_PRESENT
     /* fan present*/
     for (i = 0; i < num; ++i) {
-	status = get_one_fan_present(SYS_CPLD1_ADDR, offest * 4 + i + 1, fan_loc);
-	tmp[i * 2] = status;
+	    status = get_one_fan_present(SYS_CPLD1_ADDR, offset * 4 + i + 1, fan_loc);
+	    tmp[i * 2] = status;
     }
 #endif
 
 #ifdef FAN_OK
     /* fan power*/
     for (i = 0; i < num; ++i) {
-	status = get_one_fan_power(SYS_CPLD1_ADDR, offest * 4 + i + 1, fan_loc);
-	tmp[i * 2 + 1] = status;
+	    status = get_one_fan_power(SYS_CPLD1_ADDR, offset * 4 + i + 1, fan_loc);
+	    tmp[i * 2 + 1] = status;
     }
 #endif
+
     status = 0;
     for (i = 0; i < num * 2; ++i) {
-	shift = 0x01;
-	shift = shift << i;
-	/* status & (~shift) -> clear bit i in status */
-	/* (tmp << i) & shift -> shift tmp bit 0 to bit i and get bit i */
-	status = (status & (~shift)) | ((tmp[i] << i) & shift);
+	    shift = 0x01;
+	    shift = shift << i;
+	    /* status & (~shift) -> clear bit i in status */
+	    /* (tmp << i) & shift -> shift tmp bit 0 to bit i and get bit i */
+	    status = (status & (~shift)) | ((tmp[i] << i) & shift);
     }
 
     return status;
 }
 
 /* read FAN infomation;
- * mode=0 init fan info read
- * mode=1 status change check mode
+ * mode=1 init fan info read
+ * mode=2 status change check mode
  *
  * fan standard format
  * +------+------+------+------+------+------+------+------+
@@ -428,8 +410,8 @@ unsigned char pack_fan_status(int offest, int num, int fan_loc)
  * +------+------+------+------+------+------+------+------+
  *
  */
-static void get_fan_info(unsigned char fan_status, int fan_num_offest,
-	int status_rec_offest, unsigned char mode, int num, int fan_loc)
+static void get_fan_info(unsigned char fan_status, int fan_num_offset,
+	int status_rec_offset, unsigned char mode, int num, int fan_loc)
 {
     int i;
     unsigned char tmp;
@@ -438,64 +420,100 @@ static void get_fan_info(unsigned char fan_status, int fan_num_offest,
     info.data = 0;
     data_id = fan_loc == 1? FAN : FANR;
 
-    if (0 == mode) {	/* init fan info read mode */
-	/* fan status record */
-	fan_record->status_record[status_rec_offest] = fan_status;
-	return;
-    }
+    if (0 == mode) return;
 
-    tmp = fan_record->status_record[status_rec_offest];
-    if (1 == mode) {	/* fan status change check mode */
-	if (tmp == fan_status)
-	    return;	/* fan status not change */
-
-	for (i = 0; i < num; ++i) {
+    if (1 == mode) {	/* init fan info read mode */
+	/* fan status init record */
+	    for (i = 0; i < num; ++i) {
 #ifdef FAN_PRESENT
-		shift = 0x01 << (2 * i);
-		if ((fan_status & shift) > (tmp & shift)) {
-		    data_info = PLUG_IN; /* fan status not present -> present */
-		    data_no = fan_num_offest * 4 + i + 1;
-		    add_hardware_info(info);
-		} else if ((fan_status & shift) < (tmp & shift)) {
-		    data_info = PLUG_OUT;/* fan status present -> not present */
-		    data_no = fan_num_offest * 4 + i + 1;
-		    add_hardware_info(info);
-		}
+	printk(KERN_ALERT "FAN PRESENT\n");
+            /* fan present*/
+		    shift = 0x01 << (2 * i);
+		    if ((fan_status & shift) == shift) {
+		        data_info = PLUG_IN;
+		        data_no = fan_num_offset * 4 + i + 1;
+		        add_hardware_info(info, fan_record);
+		    } else if ((fan_status & shift) == 0x0) {
+		        data_info = PLUG_OUT;
+		        data_no = fan_num_offset * 4 + i + 1;
+		        add_hardware_info(info, fan_record);
+		    }
 #endif
 
 #ifdef FAN_OK
-	    shift = 0x01 << (2 * i + 1);
-	    if ((fan_status & shift) > (tmp & shift)) {
-		data_info = WORK_FAULT;	/* fan status norm -> abnorm */
-		data_no = fan_num_offest * 4 + i + 1;
-		add_hardware_info(info);
-	    } else if ((fan_status & shift) < (tmp & shift)) {
-		data_info = WORK_GOOD;	/* fan i+1 status abnorm -> norm */
-		data_no = fan_num_offest * 4 + i + 1;
-		add_hardware_info(info);
+	printk(KERN_ALERT "FAN OK\n");
+            /* fan power */
+	        shift = 0x01 << (2 * i + 1);
+	        if ((fan_status & shift) == shift) {
+		        data_info = WORK_FAULT;
+		        data_no = fan_num_offset * 4 + i + 1;
+		        add_hardware_info(info, fan_record);
+	        } else if ((fan_status & shift) == 0x0) {
+		        data_info = WORK_GOOD;
+		        data_no = fan_num_offset * 4 + i + 1;
+		        add_hardware_info(info, fan_record);
+	        }
+#endif
 	    }
-	}
+
+        fan_record->status_record[status_rec_offset] = fan_status;
+	    return;
+    }
+
+    tmp = fan_record->status_record[status_rec_offset];
+    if (2 == mode) {	/* fan status change check mode */
+	    if (tmp == fan_status)
+	    return;	/* fan status not change */
+
+	    for (i = 0; i < num; ++i) {
+#ifdef FAN_PRESENT
+            /* fan present */
+		    shift = 0x01 << (2 * i);
+		    if ((fan_status & shift) > (tmp & shift)) {
+		        data_info = PLUG_IN; /* fan status not present -> present */
+		        data_no = fan_num_offset * 4 + i + 1;
+		        add_hardware_info(info, fan_record);
+		    } else if ((fan_status & shift) < (tmp & shift)) {
+		        data_info = PLUG_OUT;/* fan status present -> not present */
+		        data_no = fan_num_offset * 4 + i + 1;
+		        add_hardware_info(info, fan_record);
+		    }
 #endif
 
-	/* fan status record */
-	fan_record->status_record[status_rec_offest] = fan_status;
+#ifdef FAN_OK
+            /* fan power */
+	        shift = 0x01 << (2 * i + 1);
+	        if ((fan_status & shift) > (tmp & shift)) {
+		        data_info = WORK_FAULT;	/* fan status norm -> abnorm */
+		        data_no = fan_num_offset * 4 + i + 1;
+		        add_hardware_info(info, fan_record);
+	        } else if ((fan_status & shift) < (tmp & shift)) {
+		        data_info = WORK_GOOD;	/* fan i+1 status abnorm -> norm */
+		        data_no = fan_num_offset * 4 + i + 1;
+		        add_hardware_info(info, fan_record);
+	        }
+#endif
+	    }
+
+	    /* fan status record */
+	    fan_record->status_record[status_rec_offset] = fan_status;
     }
 }
-#endif
 
+#if SFP_NUM
 /*
  * Get sfp plug in stauts
  * return 1 when plug in, 0 when plug out, -1 when failed
  */
 static int get_one_sfp_present(int port_num)
 {
-#if 0
+
     int value = 0;
 
-    value = pica8_get_sfp_plugged_in(port);
+    //value = pica8_get_sfp_plugged_in(port);
 
     if (value < 0) {
-	    printk(KERN_ALERT "get qsfp port %d failed\n", port);
+	    printk(KERN_ALERT "get qsfp port %d failed\n", port_num);
     	return 1;
     }
 
@@ -503,8 +521,7 @@ static int get_one_sfp_present(int port_num)
 	    return 0;
     else
 	    return 1;
-#endif
-
+#if 0
     int value;
     char name[256];
     char buf_tmp[MAX_ACC_SIZE];
@@ -526,12 +543,13 @@ static int get_one_sfp_present(int port_num)
 	    return 1;
     else
 	    return 0;
+#endif
 }
 
 /* pack sfp status into standard 8-bit format
  *
  */
-static unsigned char pack_sfp_status(int offest, int num)
+static unsigned char pack_sfp_status(int offset, int num)
 {
     int i;
     unsigned char status, tmp[8], shift;
@@ -547,7 +565,7 @@ static unsigned char pack_sfp_status(int offest, int num)
      */
 
     for (i = 0; i < num; ++i) {
-	    tmp[i] = get_one_sfp_present(i + 8 * offest + 1);
+	    tmp[i] = get_one_sfp_present(i + 8 * offset + 1);
     }
 
     status = 0;
@@ -561,6 +579,7 @@ static unsigned char pack_sfp_status(int offest, int num)
 
     return status;
 }
+#endif
 
 /* QSFP CPLD2-3 0x60  0x64
  * 0x0A 0x0B
@@ -575,9 +594,8 @@ static unsigned char pack_sfp_status(int offest, int num)
  * Get qsfp plug in stauts
  * return 1 when plug in, 0 when plug out, -1 when failed
  */
-static int get_one_qsfp_present(int port_num)
+static int get_one_qsfp_present(int port)
 {
-#if 0
     int value = 0;
     int port_num = port - 1;
     u8 cpld_addr, cpld_reg, offset;
@@ -589,33 +607,10 @@ static int get_one_qsfp_present(int port_num)
     value = cpld_read(cpld_addr, cpld_reg);
 
     if (value < 0) {
-	printk(KERN_ALERT "get qsfp port %d failed\n", port);
-	return 1;
+	    printk(KERN_ALERT "get qsfp port %d failed\n", port);
+	    return 1;
     }
-    if (((value >> offest) & 0x01) == 0)
-	return 1;
-    else
-	return 0;
-#endif
-
-    int value;
-    char name[256];
-    char buf_tmp[MAX_ACC_SIZE];
-
-    port_num = port_num + SFP_NUM;
-    memset(name, 0, sizeof(name)/sizeof(char));
-    sprintf(name, "%s%d%s", PORT_PATH, port_num, "/plugged_in");
-
-    mutex_lock(&access_lock);
-    value = access_user_space(name, ACC_R, buf_tmp, MAX_ACC_SIZE);
-    mutex_unlock(&access_lock);
-
-    if (value < 0) {
-	    printk(KERN_ALERT "get port%d present status failed\n", port_num);
-	    return 0;
-    }
-
-    if (!strcmp(buf_tmp, "0"))
+    if (((value >> offset) & 0x01) == 0)
 	    return 1;
     else
 	    return 0;
@@ -624,7 +619,7 @@ static int get_one_qsfp_present(int port_num)
 /* pack qsfp status into standard 8-bit format
  *
  */
-static unsigned char pack_qsfp_status(int offest, int num)
+static unsigned char pack_qsfp_status(int offset, int num)
 {
     int i;
     unsigned char status, tmp[8], shift;
@@ -640,7 +635,7 @@ static unsigned char pack_qsfp_status(int offest, int num)
      */
 
     for (i = 0; i < num; ++i) {
-	    tmp[i] = get_one_qsfp_present(i + 8 * offest + 1);
+	    tmp[i] = get_one_qsfp_present(i + 8 * offset + 1);
     }
 
     status = 0;
@@ -659,12 +654,11 @@ static unsigned char pack_qsfp_status(int offest, int num)
  * mode=1 init port info read
  * mode=2 status change check mode
  */
-static void get_port_info(unsigned char port_status, unsigned char rec_offest,
+static void get_port_info(unsigned char port_status, unsigned char rec_offset,
 	unsigned char mode, unsigned int num, unsigned int port_start)
 {
 	unsigned int i;
 	unsigned char tmp = 0;
-	unsigned char shift = 0;
 
 	if (0 == mode) return;
 
@@ -691,27 +685,26 @@ static void get_port_info(unsigned char port_status, unsigned char rec_offest,
 	    }
 
 	    /* port status record */
-		port_record->status_record[rec_offest] = port_status;
+		port_record->status_record[rec_offset] = port_status;
 		return;
     }
 
-    tmp = port_record->status_record[rec_offest] = port_status;
-    if (1 == mode) {
+    tmp = port_record->status_record[rec_offset];
+    if (2 == mode) {
 	    /* port status change check mode */
 	    if (tmp == port_status)
 	        return;	/* port status not change */
 
 	    for (i = 0; i < num; ++i) {
-	        if (i + port_start >= QSFP_NUM + SFP_NUM)
+	        if (i + port_start > QSFP_NUM + SFP_NUM)
 		        break;	/* MAX port */
 
-	        shift = 0x01 << i;
-	        if ((port_status & shift) < (tmp & shift)) {
+	        if ((port_status >> i & 0x01) < (tmp >> i & 0x01)) {
 		        data_info = PLUG_OUT;	/* status plug in -> out */
 		        data_no = i + port_start;
 
 		        add_hardware_info(info, port_record);
-	        } else if ((port_status & shift) > (tmp & shift)) {
+	        } else if ((port_status >> i & 0x01) > (tmp >> i & 0x01)) {
 		        data_info = PLUG_IN;	/* status plug out -> in */
 		        data_no = i + port_start;
 
@@ -720,32 +713,36 @@ static void get_port_info(unsigned char port_status, unsigned char rec_offest,
 	    }
 
 	    /* port status record */
-	    port_record->status_record[rec_offest] = port_status;
+	    port_record->status_record[rec_offset] = port_status;
     }
 }
 
 /* hardware check workqueue function */
 static void check_info(struct work_struct *work)
 {
-    int i, num, rec_offest, port_start;
+    int i, num, rec_offset, port_start;
     unsigned char status;
 
-#if 0
 	/* PSU */
-	rec_num = 0;
-	status = pack_psu_status(PSU_NUM);
-	get_psu_info(status, rec_num, psu_record->mode);
+    if (psu_record->mode) {
+	    rec_offset = 0;
+	    status = pack_psu_status(PSU_NUM);
+	    get_psu_info(status, rec_offset, psu_record->mode);
+    }
 
-	/* FAN 1-6 */
-	rec_num = 0;
-	for (i = 0; i < (FAN_NUM + 3) / 4; ++i) {
-	    num = FAN_NUM - i * 4;
-	    num = num >= 4? 4 : num;
-	    status = pack_fan_status(i, num, FAN);
-	    get_fan_info(status, i, count, mode, num, FAN);
-	    ++rec_num;
-	}
+	/* FAN 1-5 */
+    if (fan_record->mode) {
+	    rec_offset = 0;
+	    for (i = 0; i < (FAN_NUM + 3) / 4; ++i) {
+	        num = FAN_NUM - i * 4;
+	        num = num >= 4? 4 : num;
+	        status = pack_fan_status(i, num, FAN);
+	        get_fan_info(status, i, rec_offset, fan_record->mode, num, FAN);
+	        ++rec_offset;
+	    }
+    }
 
+#if 0
 	/* FANR 1-6 */
 	for (i = 0; i < (FAN_NUM + 3) / 4; ++i) {
 	    num = FAN_NUM - i * 4;
@@ -755,49 +752,44 @@ static void check_info(struct work_struct *work)
 	    ++rec_num;
 	}
 #endif
-#if 1
-    rec_offest = 0;
+
+    rec_offset = 0;
     port_start = 1;
     if (port_record->mode) {
+#if 0
         /* SFP 1-48 */
         for (i = 0; i < (SFP_NUM + 7) / 8; ++i) {
             num = SFP_NUM - i * 8;
             num = num >= 8? 8 : num;
             status = pack_sfp_status(i, num);
-            get_port_info(status, rec_offest, port_record->mode, num, port_start);
+            get_port_info(status, rec_offset, port_record->mode, num, port_start);
             port_start += num;
-            ++rec_offest; /* the count of port in status_record array */
+            ++rec_offset; /* the count of port in status_record array */
         }
-
-        /* QSFP 1-6 */
+#endif
+        /* QSFP 1-32 */
         for (i = 0; i < (QSFP_NUM + 7) / 8; ++i) {
             num = QSFP_NUM -i * 8;
             num = num >= 8? 8 : num;
             status = pack_qsfp_status(i, num);
-            get_port_info(status, rec_offest, port_record->mode, num, port_start);
+            get_port_info(status, rec_offset, port_record->mode, num, port_start);
             port_start += num;
-            ++rec_offest; /* the count of port in record array */
+            ++rec_offset; /* the count of port in record array */
         }
     }
-#endif
-	/* if have status change or first check, release signal */
-#if 0
-    if (psu_record->mode > 0 && psu_record->status_change > 0)
-		kill_fasync(&psu_dev->async_noti, PICA8_PSU_SIG, POLL_IN);
-    if (fan_record->mode > 0 && fan_record->status_change > 0)
-		kill_fasync(&fan_dev->async_noti, PICA8_FAN_SIG, POLL_IN);
-#endif
-	if (port_record->mode > 0 && port_record->status_change > 0)
-		//kill_fasync(&port_dev->async_noti, PICA8_PORT_SIG, POLL_IN);
-		kill_fasync(&port_dev->async_noti, PICA8_PSU_SIG, POLL_IN);
 
-    printk(KERN_ALERT "port_record->mode = %d\n", port_record->mode);
-#if 0
+    /* if have status change or first check, release signal */
+    if (psu_record->mode > 0 && psu_record->status_change > 0)
+		kill_fasync(&psu_dev->async_noti, SIGIO, POLL_IN);
+    if (fan_record->mode > 0 && fan_record->status_change > 0)
+		kill_fasync(&fan_dev->async_noti, SIGIO, POLL_IN);
+	if (port_record->mode > 0 && port_record->status_change > 0)
+		kill_fasync(&port_dev->async_noti, SIGIO, POLL_IN);
+
 	if (psu_record->mode == 1)  /* change init mode to check mode */
         psu_record->mode = 2;
     if (fan_record->mode == 1)
         fan_record->mode = 2;
-#endif
 	if (port_record->mode == 1)
         port_record->mode = 2;
 
@@ -821,15 +813,8 @@ ssize_t psu_dev_read(struct file * file, char __user * buf, size_t size,
 	int tmp = 0;
 
 	printk(KERN_ALERT "PSU dev read\n");
-    if (size != psu_record->status_change)
+    if (size != psu_record->status_change * sizeof(unsigned int))
         return -EFAULT;
-
-	if (psu_record->mode == 1) {
-        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int) * psu_record->mode);
-	    if (tmp) {
-		    return -EFAULT;
-	    }
-	}
 
 	if (psu_record->status_change > 0) {
 	    if (copy_to_user(buf, psu_record->status_change_arr,\
@@ -877,7 +862,6 @@ long psu_dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return -EINVAL;
 	}
 
-    psu_record->status_change = 1;
 	return ret;
 }
 
@@ -930,15 +914,8 @@ ssize_t fan_dev_read(struct file * file, char __user * buf, size_t size,
 	int tmp = 0;
 
 	printk(KERN_ALERT "FAN async read\n");
-    if (size != psu_record->status_change)
+    if (size != fan_record->status_change * sizeof(unsigned int))
         return -EFAULT;
-
-    if (fan_record->mode == 1) {
-        tmp = copy_to_user(buf, &swctrl_flag->mode, sizeof(int) * fan_record->mode);
-	    if (tmp) {
-		    return -EFAULT;
-	    }
-	}
 
 	if (fan_record->status_change > 0) {
 	    if (copy_to_user(buf, fan_record->status_change_arr,\
@@ -1185,8 +1162,7 @@ static int __init dev_init(void)
 		return -ENOMEM;
 
     /* TODO:simplify this code */
-#if 0
-    /* PSU device creat*/
+    /* PSU device creat */
     psu_record = kzalloc(sizeof(sta_record), GFP_KERNEL);
 	if (!psu_record)
 		return -ENOMEM;
@@ -1223,6 +1199,7 @@ static int __init dev_init(void)
 	if (!fan_record)
 		return -ENOMEM;
 
+    fan_record->mode = 0;
     fan_dev = kzalloc(sizeof(dev_node), GFP_KERNEL);
 	if (!fan_dev)
 		return -ENOMEM;
@@ -1248,8 +1225,7 @@ static int __init dev_init(void)
 		return -1;
 	}
 	device_create(fan_dev->async_class, NULL, fan_dev->dev_id, NULL, FAN_DEVICE_NAME);
-	printk(KERN_ALERT " PSU device register ok\n");
-#endif
+	printk(KERN_ALERT " FAN device register ok\n");
 
     /* PORT device creat */
     port_record = kzalloc(sizeof(sta_record), GFP_KERNEL);
@@ -1262,15 +1238,12 @@ static int __init dev_init(void)
 		return -ENOMEM;
 
     /* lack udev cann't creat /dev node by auto */
-#if 1
     ret = alloc_chrdev_region(&port_dev->dev_id, 0, 1, PORT_DEVICE_NAME);
 	if (ret) {
 		printk(KERN_ALERT "can't get major number\n");
 		unregister_chrdev_region(port_dev->dev_id, 1);
 		return ret;
 	}
-#endif
-    //port_dev->dev_id = MKDEV(PORT_MAJOR, 0);
 	cdev_init(&port_dev->async_cdev, &port_dev_fops);	/* init cdev */
 	ret = cdev_add(&port_dev->async_cdev, port_dev->dev_id, 1);
 	if (ret) {
@@ -1291,8 +1264,6 @@ static int __init dev_init(void)
     //PICA8_device_init(&psu_record, &psu_dev, PSU_DEVICE_NAME, psu_dev_fops);
     //PICA8_device_init(&fan_record, &fan_dev, FAN_DEVICE_NAME, fan_dev_fops);
     //PICA8_device_init(&port_record, &port_dev, PORT_DEVICE_NAME, port_dev_fops);
-
-    mutex_init(&access_lock);  /* init read file mutex */
 
 	wk_que_ck = kzalloc(sizeof(wk_que), GFP_KERNEL);
 	if (!wk_que_ck)
@@ -1328,7 +1299,6 @@ static void PICA8_device_exit(sta_record **dev_record, dev_node **dev_node)
 
 static void __exit dev_exit(void)
 {
-#if 0
 	/* PSU device clean */
     if (psu_record) kfree(psu_record);
     device_destroy(psu_dev->async_class, psu_dev->dev_id);
@@ -1342,7 +1312,6 @@ static void __exit dev_exit(void)
 	class_destroy(fan_dev->async_class);
 	unregister_chrdev_region(fan_dev->dev_id, 1);
 	cdev_del(&fan_dev->async_cdev);
-#endif
 
     /* PORT device clean */
     if (port_record) kfree(port_record);

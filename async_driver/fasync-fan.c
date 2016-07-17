@@ -15,37 +15,42 @@
 int fd;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void analyse_port_info(unsigned int msg_data)
+void analyse_fan_info(unsigned int msg_data)
 {
     info.data = msg_data;
 
-    if (PORT != data_id) return;
+    if (FAN != data_id) return;
     if (PLUG_IN == data_info) {
         //do something
-        printf("PORT change: port%d plugged in\n", data_no);
+        printf("FAN change: FAN%d plugged in\n", data_no);
     } else if (PLUG_OUT == data_info) {
         //do something
-       // printf("PORT change: port%d plugged out\n", data_no);
+        printf("FAN change: FAN%d plugged out\n", data_no);
+    } else if (WORK_FAULT == data_info) {
+        printf("FAN change: FAN%d work fault\n", data_no);
+    } else if (WORK_GOOD == data_info) {
+        printf("FAN change: FAN%d work good\n", data_no);
     }
 }
 
 
-void psu_signal_fun(int signum)
+void fan_signal_fun(int signum)
 {
 	unsigned int  *info_arr;
 	int i, ret;
-    unsigned long msg_num;
+    unsigned long msg_num = 0;
 
     if (info_arr)
 
-    printf("signal handle fun\n");
+    printf("signal handle fun, get a signal\n");
     pthread_mutex_lock(&mutex);
-	ret = ioctl(fd, READ_PORT_INFO, &msg_num);
+	ret = ioctl(fd, READ_FAN_INFO, &msg_num);
     if (ret < 0){
-        printf("ioctrl failed\n");
+        printf("ioctrl failed, ret = %d\n", ret);
         return;
     }
 
+		printf("ret = %d, MSG num : %d\n", ret, msg_num);
 	if (ret == 0 && msg_num > 0) {
 		info_arr = malloc(msg_num * sizeof(unsigned int));
 		if (!info_arr) {
@@ -60,10 +65,9 @@ void psu_signal_fun(int signum)
         } else if (ret != msg_num)
 		    printf("info msg num left %d\n", ret);
 
-		printf("MSG num : %d\n", msg_num);
         for (i = 0; i < msg_num; ++i) {
-			//printf("PORT key_val: 0x%x\n", info_arr[i]);
-            analyse_port_info(info_arr[i]);
+			//printf("FAN key_val: 0x%x\n", info_arr[i]);
+            analyse_fan_info(info_arr[i]);
 		}
 	}
 
@@ -81,13 +85,12 @@ int main(int argc, char **argv)
     unsigned long msg_num;
 
 	/* open device */
-	//fd = open("/dev/swctrl_psu", O_RDWR);
-	fd = open("/dev/swctrl_port", O_RDWR);
+	fd = open("/dev/swctrl_fan", O_RDWR);
 	if (fd < 0) {
-		printf("can't open %s\n", PORT_DEVICE_NAME);
+		printf("can't open %s\n", FAN_DEVICE_NAME);
 		return -1;
 	} else
-		printf("%s open success\n", PORT_DEVICE_NAME);
+		printf("%s open success\n", FAN_DEVICE_NAME);
 
 	fcntl(fd, F_SETOWN, getpid());
 
@@ -111,8 +114,7 @@ int main(int argc, char **argv)
         printf("ioctrl failed\n");
 
 	/* set signal handle function */
-	//signal(PICA8_PORT_SIG, psu_signal_fun);
-	signal(PICA8_PSU_SIG, psu_signal_fun);
+	signal(SIGIO, fan_signal_fun);
 
     while (1)
 	{
