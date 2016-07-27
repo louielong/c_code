@@ -19,17 +19,30 @@ void analyse_fan_info(unsigned int msg_data)
 {
     info.data = msg_data;
 
-    if (FAN != data_id) return;
-    if (PLUG_IN == data_info) {
-        //do something
-        printf("FAN change: FAN%d plugged in\n", data_no);
-    } else if (PLUG_OUT == data_info) {
-        //do something
-        printf("FAN change: FAN%d plugged out\n", data_no);
-    } else if (WORK_FAULT == data_info) {
-        printf("FAN change: FAN%d work fault\n", data_no);
-    } else if (WORK_GOOD == data_info) {
-        printf("FAN change: FAN%d work good\n", data_no);
+    if (FAN == data_id) {
+	if (PLUG_IN == data_info) {
+	    //do something
+	    printf("FAN change: FAN%d plugged in\n", data_no);
+	} else if (PLUG_OUT == data_info) {
+	    //do something
+	    printf("FAN change: FAN%d plugged out\n", data_no);
+	} else if (WORK_FAULT == data_info) {
+	    printf("FAN change: FAN%d work fault\n", data_no);
+	} else if (WORK_GOOD == data_info) {
+	    printf("FAN change: FAN%d work good\n", data_no);
+	}
+    } else if (FANR ==data_id) {
+	if (PLUG_IN == data_info) {
+	    //do something
+	    printf("FAN change: FANR%d plugged in\n", data_no);
+	} else if (PLUG_OUT == data_info) {
+	    //do something
+	    printf("FAN change: FANR%d plugged out\n", data_no);
+	} else if (WORK_FAULT == data_info) {
+	    printf("FAN change: FANR%d work fault\n", data_no);
+	} else if (WORK_GOOD == data_info) {
+	    printf("FAN change: FANR%d work good\n", data_no);
+	}
     }
 }
 
@@ -50,7 +63,7 @@ void fan_signal_fun(int signum)
         return;
     }
 
-		printf("ret = %d, MSG num : %d\n", ret, msg_num);
+		printf("ret = %d, MSG num : %ld\n", ret, msg_num);
 	if (ret == 0 && msg_num > 0) {
 		info_arr = malloc(msg_num * sizeof(unsigned int));
 		if (!info_arr) {

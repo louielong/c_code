@@ -36,8 +36,6 @@ void psu_signal_fun(int signum)
 	int i, ret;
     unsigned long msg_num;
 
-    if (info_arr)
-
     printf("signal handle fun\n");
     pthread_mutex_lock(&mutex);
 	ret = ioctl(fd, READ_PORT_INFO, &msg_num);
@@ -60,7 +58,7 @@ void psu_signal_fun(int signum)
         } else if (ret != msg_num)
 		    printf("info msg num left %d\n", ret);
 
-		printf("MSG num : %d\n", msg_num);
+		printf("MSG num : %ld\n", msg_num);
         for (i = 0; i < msg_num; ++i) {
 			//printf("PORT key_val: 0x%x\n", info_arr[i]);
             analyse_port_info(info_arr[i]);

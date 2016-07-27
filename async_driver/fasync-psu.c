@@ -40,8 +40,6 @@ void psu_signal_fun(int signum)
 	int i, ret;
     unsigned long msg_num = 0;
 
-    if (info_arr)
-
     printf("signal handle fun, get a signal\n");
     pthread_mutex_lock(&mutex);
 	ret = ioctl(fd, READ_PSU_INFO, &msg_num);
@@ -50,7 +48,7 @@ void psu_signal_fun(int signum)
         return;
     }
 
-		printf("ret = %d, MSG num : %d\n", ret, msg_num);
+		printf("ret = %d, MSG num : %ld\n", ret, msg_num);
 	if (ret == 0 && msg_num > 0) {
 		info_arr = malloc(msg_num * sizeof(unsigned int));
 		if (!info_arr) {
