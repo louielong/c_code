@@ -10,117 +10,82 @@
 #include<string.h>
 #include"cJSON.h"
 
-char text[] = "{\"timestamp\":\"2016-8-10T11:49:00\",\"value\":1}";
-
-
-cJSON *creat_node(cJSON *array, const double temp, const char *str)
+void json_parse(const char *str)
 {
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "temp", temp);
-    cJSON_AddStringToObject(root, "timestamp", str);
-    cJSON_AddItemToArray(array, root);
-    //cJSON_Delete(root);
-    return array;
+    /* prase JSON string */
+    cJSON *json_root, *json_value, *json_array, *json_timestamp, *arr_item;
+    int size, i;
+    double temp;
+    char *timestamp = NULL;
+
+    json_root = cJSON_Parse(str);
+    if (!json_root) {
+        printf("Root Error : [%s]\n", cJSON_GetErrorPtr());
+        return;
+    }
+
+    json_value = cJSON_GetObjectItem(json_root, "total");
+    if (json_value->type == cJSON_Number) {
+            printf("Totlal Num : %d\n", json_value->valueint);
+    }
+
+    json_array = cJSON_GetObjectItem(json_root, "rows");
+    if (!json_array) {
+        printf("Array Error : [%s]\n", cJSON_GetErrorPtr());
+        return;
+    }
+    size = cJSON_GetArraySize(json_array);
+
+    for (i = 0; i < size; ++i) {
+        arr_item = cJSON_GetArrayItem(json_array, i);
+        if (arr_item) {
+            json_value = cJSON_GetObjectItem(arr_item, "temp");
+            if (json_value->type == cJSON_Number) {
+                temp = json_value->valuedouble;
+            }
+
+            json_timestamp = cJSON_GetObjectItem(arr_item, "timestamp");
+            if (json_timestamp->type == cJSON_String) {
+                timestamp = json_timestamp->valuestring;
+            }
+        }
+
+        printf("Temp : %.2lf\nTime : %s\n", temp, timestamp);
+    }
+
+    cJSON_Delete(json_root);
+    return;
 }
 
 
 int main(int argc, const char* argv[])
 {
-#if 0
-    cJSON *json, *json_value, *json_timestamp, *json_item;
-    json = cJSON_Parse(text);
+    char *timestamp[3] = {"2016-8-10 15:05:08", "2016-8-10 18:10:23",
+        "2016-8-10 20:43:42"};
+    double temp[3] =  {23.4, 27.4, 22.4};
 
-    if (!json) {
-        printf("Error before : [%s]\n", cJSON_GetErrorPtr());
-    } else {
-        json_value = cJSON_GetObjectItem(json, "value");
-        if (json_value->type == cJSON_Number) {
-            printf("value : %d\n", json_value->valueint);
-        } else if (json_value->type == cJSON_String) {
-            printf("value : %s\n", json_value->valuestring);
-        }
+    cJSON *root, *array, *arr;
+    int i;
 
-        json_timestamp = cJSON_GetObjectItem(json, "timestamp");
-        if (json_timestamp->type == cJSON_String) {
-            printf("timestamp : %s\n", json_timestamp->valuestring);
-        }
+    /* creat JSON string */
+    root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "total", 3);
+    cJSON_AddItemToObject(root, "rows", array = cJSON_CreateArray());
 
-        cJSON_Delete(json);
+    for (i = 0; i < 3; ++i) {
+        cJSON_AddItemToArray(array, arr = cJSON_CreateObject());
+        cJSON_AddItemToObject(arr, "temp", cJSON_CreateNumber(temp[i]));
+        cJSON_AddItemToObject(arr, "timestamp", cJSON_CreateString(timestamp[i]));
     }
 
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON *arry = cJSON_CreateArray();
-    cJSON_AddNumberToObject(root, "temp", 23.4);
-    cJSON_AddStringToObject(root, "timestamp", "2016-8-10 15:05:08");
-    cJSON_AddItemToArray(arry, root);
-    cJSON *root1 = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root1, "temp", 27.4);
-    cJSON_AddStringToObject(root1, "timestamp", "2016-8-10 18:10:23");
-    cJSON_AddItemToArray(arry, root1);
-    cJSON *root2 = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root2, "temp", 22.4);
-    cJSON_AddStringToObject(root2, "timestamp", "2016-8-10 20:43:42");
-    cJSON_AddItemToArray(arry, root2);
-#endif
-
-    cJSON *array, json_root, json_value, json_item;
-
-    array = cJSON_CreateArray();
-    array = creat_node(array, 23.4, "2016-8-10 15:05:08");
-    array = creat_node(array, 27.0, "2016-8-10 18:10:23");
-    array = creat_node(array, 21.6, "2016-8-10 20:43:42");
-
-    char *out = cJSON_Print(array);
+    char *out = cJSON_Print(root);
     printf("%s\n", out);
-return 0;
-
-#if 0
-    json = cJSON_Parse(out);
-    cJSON *task_array = cJSON_GetObjectItem(json, "root");
-    printf("debug1\n");
-    while(task_list != NULL) {
-        json_value = cJSON_GetObjectItem(task_list, "temp");
-        if (json_value->type == cJSON_Number) {
-            temp = json_value->valuedouble;
-        }
-
-        json_timestamp = cJSON_GetObjectItem(task_list, "timestamp");
-        if (json_timestamp->type == cJSON_String) {
-            timestamp = json_timestamp->valuestring;
-        }
-
-        printf("Temp : %.2lf\nTime : %s\n", temp, timestamp);
-
-        task_list = task_list->next;
-    }
-    cJSON_Delete(json);
-    return 0;
-
-    if (!json) {
-        printf("Error before : [%s]\n", cJSON_GetErrorPtr());
-    } else {
-        json_value = cJSON_GetObjectItem(json, "temp");
-        if (json_value->type == cJSON_Number) {
-            temp = json_value->valuedouble;
-        }
-
-        json_timestamp = cJSON_GetObjectItem(json, "timestamp");
-        if (json_timestamp->type == cJSON_String) {
-            timestamp = json_timestamp->valuestring;
-        }
-
-        printf("Temp : %lf\nTime : %s\n", temp, timestamp);
-        cJSON_Delete(json);
-    }
-
     cJSON_Delete(root);
-    cJSON_Delete(root1);
-    cJSON_Delete(root2);
+
+
+    json_parse(out);
+
     free(out);
-#endif
-
-
 
     return 0;
 }
